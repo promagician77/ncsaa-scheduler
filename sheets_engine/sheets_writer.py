@@ -9,8 +9,8 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict
 from collections import defaultdict
 
-from models import Schedule, Game, Division
-from config import SPREADSHEET_ID, CREDENTIALS_FILE, SHEET_WEEK_PREFIX
+from .models import Schedule, Game, Division
+from .config import SPREADSHEET_ID, CREDENTIALS_FILE, SHEET_WEEK_PREFIX
 
 
 class SheetsWriter:
@@ -273,7 +273,7 @@ class SheetsWriter:
                 teams.add(game.home_team)
                 teams.add(game.away_team)
             
-            from validator import ScheduleValidator
+            from .validator import ScheduleValidator
             validator = ScheduleValidator()
             
             for team in sorted(teams, key=lambda t: t.id):

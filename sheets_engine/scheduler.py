@@ -9,11 +9,11 @@ from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 import itertools
 
-from models import (
+from .models import (
     Team, Facility, Game, TimeSlot, Division, Schedule,
     SchedulingConstraint, ScheduleValidationResult
 )
-from config import (
+from .config import (
     SEASON_START_DATE, SEASON_END_DATE, US_HOLIDAYS,
     WEEKNIGHT_START_TIME, WEEKNIGHT_END_TIME,
     SATURDAY_START_TIME, SATURDAY_END_TIME,

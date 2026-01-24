@@ -1,20 +1,16 @@
 """
-Main entry point for the NCSAA Basketball Scheduling System (CLI).
+Main entry point for the NCSAA Basketball Scheduling System.
 Orchestrates the complete scheduling workflow.
 """
 
 import sys
 import argparse
 from datetime import datetime
-import os
 
-# Add backend directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.services.sheets_reader import SheetsReader
-from app.services.scheduler import ScheduleOptimizer
-from app.services.validator import ScheduleValidator
-from app.services.sheets_writer import SheetsWriter
+from sheets_engine.sheets_reader import SheetsReader
+from sheets_engine.scheduler import ScheduleOptimizer
+from sheets_engine.validator import ScheduleValidator
+from sheets_engine.sheets_writer import SheetsWriter
 
 
 def main():

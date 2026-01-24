@@ -9,11 +9,11 @@ from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
 import re
 
-from models import (
+from .models import (
     Team, School, Facility, Division, Tier, Cluster,
     Schedule
 )
-from config import (
+from .config import (
     SPREADSHEET_ID, CREDENTIALS_FILE,
     SHEET_DATES_NOTES, SHEET_TIERS_CLUSTERS, SHEET_TEAM_LIST,
     SHEET_FACILITIES, SHEET_COMPETITIVE_TIERS
@@ -146,14 +146,14 @@ class SheetsReader:
             
             # Fallback to config if dates not found
             if not rules['season_start']:
-                from config import SEASON_START_DATE
+                from .config import SEASON_START_DATE
                 rules['season_start'] = self._parse_date(SEASON_START_DATE)
             if not rules['season_end']:
-                from config import SEASON_END_DATE
+                from .config import SEASON_END_DATE
                 rules['season_end'] = self._parse_date(SEASON_END_DATE)
             
             # Add holidays from config
-            from config import US_HOLIDAYS
+            from .config import US_HOLIDAYS
             for holiday_str in US_HOLIDAYS:
                 holiday_date = self._parse_date(holiday_str)
                 if holiday_date and holiday_date not in rules['holidays']:
@@ -168,7 +168,7 @@ class SheetsReader:
             import traceback
             traceback.print_exc()
             # Return defaults from config
-            from config import SEASON_START_DATE, SEASON_END_DATE, US_HOLIDAYS
+            from .config import SEASON_START_DATE, SEASON_END_DATE, US_HOLIDAYS
             return {
                 'season_start': self._parse_date(SEASON_START_DATE),
                 'season_end': self._parse_date(SEASON_END_DATE),

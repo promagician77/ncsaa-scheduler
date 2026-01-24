@@ -7,11 +7,11 @@ from datetime import timedelta
 from typing import List, Dict, Set
 from collections import defaultdict
 
-from models import (
+from .models import (
     Schedule, Game, Team, SchedulingConstraint,
     ScheduleValidationResult, TeamScheduleStats
 )
-from config import (
+from .config import (
     MAX_GAMES_PER_7_DAYS, MAX_GAMES_PER_14_DAYS,
     MAX_DOUBLEHEADERS_PER_SEASON, DOUBLEHEADER_BREAK_MINUTES,
     PRIORITY_WEIGHTS
@@ -349,7 +349,7 @@ class ScheduleValidator:
         
         # Games by division
         report.append("Games by Division:")
-        from models import Division
+        from .models import Division
         for division in Division:
             div_games = schedule.get_games_by_division(division)
             if div_games:

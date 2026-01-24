@@ -14,11 +14,11 @@ import os
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
-from sheets_reader import SheetsReader
-from sheets_writer import SheetsWriter
-from scheduler import ScheduleOptimizer
-from validator import ScheduleValidator
-from models import Game, Division
+from sheets_engine.sheets_reader import SheetsReader
+from sheets_engine.sheets_writer import SheetsWriter
+from sheets_engine.scheduler import ScheduleOptimizer
+from sheets_engine.validator import ScheduleValidator
+from sheets_engine.models import Game, Division
 
 app = FastAPI(
     title="NCSAA Basketball Scheduling API",
