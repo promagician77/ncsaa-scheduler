@@ -70,6 +70,7 @@ SHEET_TIERS_CLUSTERS = "TIERS, CLUSTERS, RIVALS, DO NOT PLAY"
 SHEET_TEAM_LIST = "WINTER BASKETBALL TEAM LIST"
 SHEET_FACILITIES = "FACILITIES"
 SHEET_COMPETITIVE_TIERS = "COMPETITIVE TIERS"
+SHEET_BLACKOUTS = "WINTER BASKETBALL BLACKOUTS"
 SHEET_WEEK_PREFIX = "26 WINTER WEEK"  # Prefix for weekly schedule sheets
 
 # Scheduling Rules (Constants from the sheet)
@@ -130,17 +131,17 @@ CLUSTERS = ["East", "West", "North", "Henderson"]
 
 # Scheduling Priorities
 PRIORITY_WEIGHTS = {
-    "cluster_same_school": 100,  # Highest priority: cluster by school name
-    "cluster_same_coach": 90,    # Second priority: cluster by coach
-    "respect_rivals": 80,         # Required matchups
-    "respect_do_not_play": 100,  # Must not schedule
-    "tier_matching": 70,          # Prefer same tier matchups
-    "geographic_cluster": 60,     # Prefer same geographic area
-    "facility_availability": 90,  # Must respect facility dates
-    "game_frequency": 85,         # Respect max games rules
-    "doubleheader_limit": 80,     # Respect doubleheader rules
-    "home_away_balance": 50,      # Balance home/away games
-    "weeknight_slots_full": 75    # Use all 3 weeknight slots
+    "cluster_same_school": 100,   # Highest priority: cluster by school name
+    "cluster_same_coach": 90,     # Second priority: cluster by coach
+    "respect_rivals": 80,          # Required matchups
+    "respect_do_not_play": 100,   # Must not schedule
+    "geographic_cluster": 10000,   # CRITICAL: Prevent cross-town travel (increased from 300)
+    "tier_matching": 400,          # CRITICAL: Competitive balance
+    "facility_availability": 90,   # Must respect facility dates
+    "game_frequency": 85,          # Respect max games rules
+    "doubleheader_limit": 80,      # Respect doubleheader rules
+    "home_away_balance": 50,       # Balance home/away games
+    "weeknight_slots_full": 75     # Use all 3 weeknight slots
 }
 
 # Optimization Settings

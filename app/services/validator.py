@@ -353,7 +353,7 @@ class ScheduleValidator:
         
         # Games by division
         report.append("Games by Division:")
-        from models import Division
+        from app.models import Division
         for division in Division:
             div_games = schedule.get_games_by_division(division)
             if div_games:

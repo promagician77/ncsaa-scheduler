@@ -13,13 +13,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for frontend
+# Enable CORS for frontend (allow any localhost origin so dev on any port works)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js default port
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,
 )
 
 # Include API routes
@@ -28,7 +30,6 @@ app.include_router(routes.router)
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
     return {
         "message": "NCSAA Basketball Scheduling API",
         "version": "1.0.0",

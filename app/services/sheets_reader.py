@@ -142,14 +142,14 @@ class SheetsReader:
             
             # Fallback to config if dates not found
             if not rules['season_start']:
-                from config import SEASON_START_DATE
+                from app.core.config import SEASON_START_DATE
                 rules['season_start'] = self._parse_date(SEASON_START_DATE)
             if not rules['season_end']:
-                from config import SEASON_END_DATE
+                from app.core.config import SEASON_END_DATE
                 rules['season_end'] = self._parse_date(SEASON_END_DATE)
             
             # Add holidays from config
-            from config import US_HOLIDAYS
+            from app.core.config import US_HOLIDAYS
             for holiday_str in US_HOLIDAYS:
                 holiday_date = self._parse_date(holiday_str)
                 if holiday_date and holiday_date not in rules['holidays']:
@@ -164,7 +164,7 @@ class SheetsReader:
             import traceback
             traceback.print_exc()
             # Return defaults from config
-            from config import SEASON_START_DATE, SEASON_END_DATE, US_HOLIDAYS
+            from app.core.config import SEASON_START_DATE, SEASON_END_DATE, US_HOLIDAYS
             return {
                 'season_start': self._parse_date(SEASON_START_DATE),
                 'season_end': self._parse_date(SEASON_END_DATE),
@@ -183,7 +183,7 @@ class SheetsReader:
         schools = {}
         
         try:
-            # Load from TIERS, CLUSTERS sheet
+            # Load from TIERS, CLUSTERS sheet (for clusters)
             sheet = self.spreadsheet.worksheet(SHEET_TIERS_CLUSTERS)
             data = sheet.get_all_values()
             
@@ -201,7 +201,7 @@ class SheetsReader:
             cluster_col = next((i for i, h in enumerate(headers) if 'cluster' in h), -1)
             tier_col = next((i for i, h in enumerate(headers) if 'tier' in h), -1)
             
-            # Parse school data
+            # Parse school data (clusters and possibly tiers)
             for row in data[header_row + 1:]:
                 if not row or len(row) <= school_col:
                     continue
@@ -224,6 +224,52 @@ class SheetsReader:
                     tier=tier
                 )
             
+            # CRITICAL: Load tier classifications from COMPETITIVE TIERS sheet
+            # This is the authoritative source for tier data
+            try:
+                tier_sheet = self.spreadsheet.worksheet(SHEET_COMPETITIVE_TIERS)
+                tier_data = tier_sheet.get_all_values()
+                
+                # The sheet has format: Tier 1 | Tier 2 | Tier 3 | Tier 4
+                # Row 1: Headers "Tier 1 – Elite..." etc
+                # Row 2+: School names in each column
+                
+                if len(tier_data) > 1:
+                    # Map column index to tier
+                    tier_map = {
+                        1: Tier.TIER_1,  # Column B
+                        2: Tier.TIER_2,  # Column C
+                        3: Tier.TIER_3,  # Column D
+                        4: Tier.TIER_4   # Column E
+                    }
+                    
+                    # Start from row 2 (index 2, after headers)
+                    for row in tier_data[2:]:
+                        if not row or len(row) < 2:
+                            continue
+                        
+                        # Check each tier column
+                        for col_idx, tier in tier_map.items():
+                            if len(row) > col_idx:
+                                school_name = str(row[col_idx]).strip()
+                                if school_name and school_name != '':
+                                    # Normalize school name
+                                    school_name = self._normalize_school_name(school_name)
+                                    
+                                    # Update or create school with tier
+                                    if school_name in schools:
+                                        schools[school_name].tier = tier
+                                    else:
+                                        schools[school_name] = School(
+                                            name=school_name,
+                                            cluster=None,
+                                            tier=tier
+                                        )
+                
+                print(f"Loaded tier classifications from COMPETITIVE TIERS sheet")
+            except Exception as e:
+                print(f"Warning: Could not load COMPETITIVE TIERS sheet: {e}")
+            
             print(f"Loaded {len(schools)} schools")
             
         except Exception as e:
@@ -231,6 +277,40 @@ class SheetsReader:
         
         self._schools_cache = schools
         return schools
+    
+    def _normalize_school_name(self, school_name: str) -> str:
+        """
+        Normalize school name by removing tier and color suffixes.
+        This ensures teams from the same school are grouped together.
+        
+        Examples:
+            'Faith 6A' -> 'Faith'
+            'Faith 7A' -> 'Faith'
+            'Meadows Blue' -> 'Meadows'
+            'Meadows Silver' -> 'Meadows'
+            'Somerset Academy NLV' -> 'Somerset Academy NLV'
+        """
+        if not school_name:
+            return school_name
+        
+        import re
+        
+        # Remove tier suffixes: 6A, 7A, 8A, etc. (at the end of the name)
+        normalized = re.sub(r'\s+\d+[A-Z]\s*$', '', school_name).strip()
+        
+        # Remove color suffixes: Blue, Silver, White, Black, Gold, Navy, etc.
+        # These are team identifiers, not separate schools
+        color_suffixes = [
+            'Blue', 'Silver', 'White', 'Black', 'Gold', 'Navy', 
+            'Red', 'Green', 'Purple', 'Orange', 'Yellow'
+        ]
+        
+        for color in color_suffixes:
+            # Remove color at the end of the name (case-insensitive)
+            pattern = r'\s+' + re.escape(color) + r'\s*$'
+            normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE).strip()
+        
+        return normalized
     
     def _parse_team_name(self, team_str: str) -> tuple:
         """
@@ -247,11 +327,13 @@ class SheetsReader:
         match = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', team_str)
         if match:
             school_name = match.group(1).strip()
+            # Normalize school name to remove tier suffixes
+            school_name = self._normalize_school_name(school_name)
             coach_name = match.group(2).strip()
             return school_name, coach_name
         
         # If no parentheses, assume it's just school name
-        return team_str, None
+        return self._normalize_school_name(team_str), None
     
     def load_teams(self) -> List[Team]:
         """Load team information from the TEAM LIST sheet."""
@@ -439,6 +521,15 @@ class SheetsReader:
                 dates_str = str(row[dates_col]).strip() if len(row) > dates_col else ''
                 available_dates = self._parse_date_range(dates_str)
                 
+                # DEBUG: Log date parsing for key facilities
+                if facility_name and ('faith' in facility_name.lower() or 'lvbc' in facility_name.lower() or 'las vegas basketball' in facility_name.lower()):
+                    if dates_str:
+                        print(f"  [FACILITY] {facility_name} - {court_name}: dates_str='{dates_str[:100]}...' → parsed {len(available_dates)} dates")
+                        if available_dates:
+                            print(f"    First 5 dates: {sorted(available_dates)[:5]}")
+                    else:
+                        print(f"  [FACILITY] {facility_name} - {court_name}: NO dates string (empty DATES column)")
+                
                 # Parse court name
                 court_name = str(row[court_col]).strip() if len(row) > court_col else ''
                 
@@ -481,6 +572,13 @@ class SheetsReader:
             facilities = list(facilities_dict.values())
             
             print(f"Loaded {len(facilities)} facilities")
+            
+            # Summary: Show facilities with and without date restrictions
+            facilities_with_dates = [f for f in facilities if f.available_dates]
+            facilities_without_dates = [f for f in facilities if not f.available_dates]
+            
+            print(f"  Facilities with specific dates: {len(facilities_with_dates)}")
+            print(f"  Facilities available all season: {len(facilities_without_dates)}")
             
         except Exception as e:
             print(f"Error loading facilities: {e}")
@@ -551,6 +649,50 @@ class SheetsReader:
         except Exception as e:
             print(f"Error loading rivals/restrictions: {e}")
     
+    def load_blackouts(self) -> Dict[str, List[date]]:
+        """
+        Load school blackout dates from Google Sheets.
+        
+        Returns:
+            Dict mapping school name to list of blackout dates
+        """
+        try:
+            from app.core.config import SHEET_BLACKOUTS
+            blackouts_sheet = self.spreadsheet.worksheet(SHEET_BLACKOUTS)
+            data = blackouts_sheet.get_all_values()
+            
+            blackouts = {}
+            
+            for row in data[1:]:  # Skip header row
+                if len(row) < 2:
+                    continue
+                
+                school_name = str(row[0]).strip()
+                blackout_str = str(row[1]).strip()
+                
+                if not school_name or not blackout_str:
+                    continue
+                
+                # Normalize school name to match team data
+                normalized_name = self._normalize_school_name(school_name)
+                
+                # Parse dates from blackout string
+                # Format: "Blackouts: Jan. 6, 14, 21, 24, 28 Feb. 3, 10, 17, 23, 27"
+                dates = self._parse_date_range(blackout_str)
+                
+                if dates:
+                    if normalized_name in blackouts:
+                        blackouts[normalized_name].extend(dates)
+                    else:
+                        blackouts[normalized_name] = dates
+            
+            print(f"Loaded blackout dates for {len(blackouts)} schools")
+            return blackouts
+            
+        except Exception as e:
+            print(f"Warning: Could not load blackouts: {e}")
+            return {}
+    
     def load_all_data(self) -> Tuple[List[Team], List[Facility], Dict]:
         """Load all data from Google Sheets."""
         print("=" * 60)
@@ -561,7 +703,11 @@ class SheetsReader:
         schools = self.load_schools()
         teams = self.load_teams()
         facilities = self.load_facilities()
+        blackouts = self.load_blackouts()
         self.load_rivals_and_restrictions(teams)
+        
+        # Add blackouts to rules
+        rules['blackouts'] = blackouts
         
         print("=" * 60)
         print(f"Data loading complete:")
