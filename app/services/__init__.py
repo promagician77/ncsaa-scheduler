@@ -2,12 +2,12 @@
 Services for scheduling, validation, and Google Sheets integration.
 """
 
-from .scheduler import ScheduleOptimizer
+from .scheduler import SchoolBasedScheduler
 from .validator import ScheduleValidator
 from .sheets_reader import SheetsReader
 
 __all__ = [
-    "ScheduleOptimizer",
+    "SchoolBasedScheduler",
     "ScheduleValidator",
     "SheetsReader"
 ]

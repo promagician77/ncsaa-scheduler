@@ -4,7 +4,7 @@ Celery tasks for schedule generation.
 
 from app.core.celery_app import celery_app
 from app.services.sheets_reader import SheetsReader
-from app.services.scheduler_v2 import SchoolBasedScheduler
+from app.services.scheduler import SchoolBasedScheduler
 from app.services.validator import ScheduleValidator
 from datetime import datetime
 import traceback

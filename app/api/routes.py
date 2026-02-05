@@ -9,10 +9,8 @@ from datetime import datetime, date
 from celery.result import AsyncResult
 
 from app.services.sheets_reader import SheetsReader
-from app.services.scheduler import ScheduleOptimizer
-from app.services.scheduler_v2 import SchoolBasedScheduler  # New school-based clustering algorithm  # NEW: School-based scheduler
+from app.services.scheduler import SchoolBasedScheduler
 from app.services.validator import ScheduleValidator
-from app.models import Game, Division
 from app.core.config import (
     SEASON_START_DATE, SEASON_END_DATE,
     WEEKNIGHT_START_TIME, WEEKNIGHT_END_TIME,
@@ -33,17 +31,15 @@ router = APIRouter(prefix="/api", tags=["schedule"])
 
 
 class ScheduleRequest(BaseModel):
-    """Request model for schedule generation."""
     force_regenerate: bool = False
 
 
 class GameResponse(BaseModel):
-    """Response model for a single game."""
     id: str
     home_team: str
     away_team: str
     date: str
-    day: str  # Day of week (Monday, Tuesday, etc.)
+    day: str
     time: str
     facility: str
     court: int
@@ -51,7 +47,6 @@ class GameResponse(BaseModel):
 
 
 class ScheduleResponse(BaseModel):
-    """Response model for schedule generation."""
     success: bool
     message: str
     total_games: int
@@ -61,7 +56,6 @@ class ScheduleResponse(BaseModel):
 
 
 class ScheduleStats(BaseModel):
-    """Statistics about the schedule."""
     total_teams: int
     total_games: int
     games_by_division: Dict[str, int]
@@ -72,21 +66,15 @@ class ScheduleStats(BaseModel):
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
 @router.post("/schedule/async")
 async def generate_schedule_async(request: ScheduleRequest):
-    """
-    Start async schedule generation task.
-    
-    Returns:
-        dict: Task ID for polling status
-    """
     try:
-        # Start Celery task
         task = generate_schedule_task.delay()
+        
+        print(f"Current Task Info: {task}")
         
         return {
             "task_id": task.id,
@@ -99,15 +87,6 @@ async def generate_schedule_async(request: ScheduleRequest):
 
 @router.get("/schedule/status/{task_id}")
 async def get_schedule_status(task_id: str):
-    """
-    Get status of async schedule generation task.
-    
-    Args:
-        task_id: Celery task ID
-        
-    Returns:
-        dict: Task status and result (if complete)
-    """
     try:
         task_result = AsyncResult(task_id, app=celery_app)
         
@@ -150,52 +129,34 @@ async def get_schedule_status(task_id: str):
 
 @router.post("/schedule", response_model=ScheduleResponse)
 async def generate_schedule(request: ScheduleRequest):
-    """
-    Generate a new basketball schedule.
-    
-    This endpoint:
-    1. Loads data from Google Sheets
-    2. Generates an optimized schedule
-    3. Validates the schedule
-    4. Returns the schedule data
-    """
     try:
         start_time = datetime.now()
         
-        # Load data from Google Sheets
         print("Loading data from Google Sheets...")
         reader = SheetsReader()
         teams, facilities, rules = reader.load_all_data()
         
-        # Generate schedule using NEW school-based algorithm
         print(f"Generating schedule for {len(teams)} teams...")
         print("Using REDESIGNED school-based scheduler (groups by schools, not divisions)")
-        optimizer = SchoolBasedScheduler(teams, facilities, rules)  # NEW SCHEDULER
+        optimizer = SchoolBasedScheduler(teams, facilities, rules)
         schedule = optimizer.optimize_schedule()
         
-        # Validate schedule
         print("Validating schedule...")
         validator = ScheduleValidator()
         validation_result = validator.validate_schedule(schedule)
         
-        # Convert games to response format
         games_response = []
         for game in schedule.games:
-            # Format team names with coach names in parentheses
             home_team_display = f"{game.home_team.school.name} ({game.home_team.coach_name})"
             away_team_display = f"{game.away_team.school.name} ({game.away_team.coach_name})"
             
-            # Format facility with specific court
             facility_display = game.time_slot.facility.name
             if game.time_slot.court_number and game.time_slot.court_number > 0:
                 facility_display = f"{facility_display} - Court {game.time_slot.court_number}"
             
-            # Format date and day (matching Google Sheets format)
             date_str = game.time_slot.date.strftime("%Y-%m-%d")
-            day_str = game.time_slot.date.strftime("%A")  # Full day name (Monday, Tuesday, etc.)
+            day_str = game.time_slot.date.strftime("%A")
             
-            # Format time in 12-hour format with AM/PM (matching Google Sheets format)
-            # Format: "5:00 PM - 6:00 PM" to match Google Sheets
             start_time_str = game.time_slot.start_time.strftime("%I:%M %p").lstrip('0')
             end_time_str = game.time_slot.end_time.strftime("%I:%M %p").lstrip('0')
             time_str = f"{start_time_str} - {end_time_str}"
@@ -212,10 +173,8 @@ async def generate_schedule(request: ScheduleRequest):
                 division=game.division.value
             ))
         
-        # Calculate generation time
         generation_time = (datetime.now() - start_time).total_seconds()
         
-        # Prepare validation summary
         validation_summary = {
             "is_valid": validation_result.is_valid,
             "hard_violations": len(validation_result.hard_constraint_violations),
@@ -223,7 +182,6 @@ async def generate_schedule(request: ScheduleRequest):
             "total_penalty": validation_result.total_penalty_score
         }
         
-        # Build success message
         message = f"Schedule generated successfully with {len(schedule.games)} games"
         
         return ScheduleResponse(
@@ -243,22 +201,16 @@ async def generate_schedule(request: ScheduleRequest):
 
 @router.get("/stats", response_model=ScheduleStats)
 async def get_schedule_stats():
-    """
-    Get statistics about teams and potential schedule.
-    """
     try:
-        # Load data from Google Sheets
         reader = SheetsReader()
         teams, facilities, rules = reader.load_all_data()
         
-        # Calculate stats
         games_by_division = {}
         for team in teams:
             div_name = team.division.value
             if div_name not in games_by_division:
                 games_by_division[div_name] = 0
         
-        # Estimate games (8 games per team / 2 since each game has 2 teams)
         for div_name in games_by_division:
             div_teams = [t for t in teams if t.division.value == div_name]
             games_by_division[div_name] = len(div_teams) * 8 // 2
@@ -269,7 +221,7 @@ async def get_schedule_stats():
             total_teams=len(teams),
             total_games=total_estimated_games,
             games_by_division=games_by_division,
-            teams_with_8_games=0,  # Will be calculated after generation
+            teams_with_8_games=0,
             teams_under_8_games=0,
             teams_over_8_games=0
         )
@@ -280,16 +232,10 @@ async def get_schedule_stats():
 
 @router.get("/data")
 async def get_scheduling_data():
-    """
-    Get all scheduling data from Google Sheets for display.
-    Returns rules, teams, facilities, schools, tiers, and other information.
-    """
     try:
-        # Load data from Google Sheets
         reader = SheetsReader()
         teams, facilities, rules = reader.load_all_data()
         
-        # Extract unique schools
         schools_dict = {}
         for team in teams:
             school_name = team.school.name
@@ -309,7 +255,6 @@ async def get_scheduling_data():
         
         schools = list(schools_dict.values())
         
-        # Format teams data
         teams_data = []
         for team in teams:
             teams_data.append({
@@ -325,7 +270,6 @@ async def get_scheduling_data():
                 "do_not_play_count": len(team.do_not_play)
             })
         
-        # Format facilities data
         facilities_data = []
         for facility in facilities:
             facilities_data.append({
@@ -338,7 +282,6 @@ async def get_scheduling_data():
                 "notes": facility.notes
             })
         
-        # Format rules data
         rules_data = {
             "season_start": rules.get("season_start"),
             "season_end": rules.get("season_end"),
@@ -354,7 +297,6 @@ async def get_scheduling_data():
             "weeknight_slots_required": 3
         }
         
-        # Get divisions summary
         divisions_summary = {}
         for team in teams:
             div = team.division.value
@@ -366,11 +308,9 @@ async def get_scheduling_data():
                 }
             divisions_summary[div]["team_count"] += 1
         
-        # Calculate estimated games
         for div in divisions_summary.values():
             div["estimated_games"] = (div["team_count"] * 8) // 2
         
-        # Get clusters summary
         clusters_summary = {}
         for team in teams:
             if team.cluster:
@@ -379,14 +319,12 @@ async def get_scheduling_data():
                     clusters_summary[cluster] = {"name": cluster, "team_count": 0, "school_count": 0}
                 clusters_summary[cluster]["team_count"] += 1
         
-        # Count schools per cluster
         for school in schools:
             if school["cluster"]:
                 cluster = school["cluster"]
                 if cluster in clusters_summary:
                     clusters_summary[cluster]["school_count"] += 1
         
-        # Get tiers summary
         tiers_summary = {}
         for team in teams:
             if team.tier:
@@ -395,7 +333,6 @@ async def get_scheduling_data():
                     tiers_summary[tier] = {"name": tier, "team_count": 0, "school_count": 0}
                 tiers_summary[tier]["team_count"] += 1
         
-        # Count schools per tier
         for school in schools:
             if school["tier"]:
                 tier = school["tier"]
@@ -428,15 +365,10 @@ async def get_scheduling_data():
 
 @router.get("/info")
 async def get_schedule_info():
-    """
-    Get detailed information about teams, facilities, schools, rankings, and scheduling rules.
-    """
     try:
-        # Load data from Google Sheets
         reader = SheetsReader()
         teams, facilities, rules = reader.load_all_data()
         
-        # Organize teams by division
         teams_by_division: Dict[str, List[Dict]] = {}
         schools_dict: Dict[str, Dict] = {}
         
@@ -445,7 +377,6 @@ async def get_schedule_info():
             if div_name not in teams_by_division:
                 teams_by_division[div_name] = []
             
-            # Collect school information
             school_key = team.school.name
             if school_key not in schools_dict:
                 schools_dict[school_key] = {
@@ -455,7 +386,6 @@ async def get_schedule_info():
                     "teams": []
                 }
             
-            # Add team to school
             schools_dict[school_key]["teams"].append({
                 "id": team.id,
                 "division": div_name,
@@ -463,7 +393,6 @@ async def get_schedule_info():
                 "coach_email": team.coach_email
             })
             
-            # Team information
             team_info = {
                 "id": team.id,
                 "school_name": team.school.name,
@@ -478,7 +407,6 @@ async def get_schedule_info():
             }
             teams_by_division[div_name].append(team_info)
         
-        # Facility information
         facilities_info = []
         for facility in facilities:
             facility_info = {
@@ -493,8 +421,6 @@ async def get_schedule_info():
                 "unavailable_dates": [str(d) for d in facility.unavailable_dates[:10]]  # First 10
             }
             facilities_info.append(facility_info)
-        
-        # Ranking/Tier information and scheduling rules are already imported at the top
         
         scheduling_rules = {
             "season": {
@@ -555,9 +481,7 @@ async def get_schedule_info():
         raise HTTPException(status_code=500, detail=f"Failed to get info: {str(e)}")
 
 
-# Information endpoints
 class TeamInfo(BaseModel):
-    """Team information response."""
     id: str
     school_name: str
     division: str
@@ -571,7 +495,6 @@ class TeamInfo(BaseModel):
 
 
 class FacilityInfo(BaseModel):
-    """Facility information response."""
     name: str
     address: str
     max_courts: int
@@ -582,15 +505,13 @@ class FacilityInfo(BaseModel):
 
 
 class SchoolInfo(BaseModel):
-    """School information response."""
     name: str
     cluster: Optional[str]
     tier: Optional[str]
-    teams: List[str]  # Team IDs
+    teams: List[str]
 
 
 class RulesInfo(BaseModel):
-    """Schedule creation rules information."""
     season_start: str
     season_end: str
     game_duration_minutes: int
@@ -614,7 +535,6 @@ class RulesInfo(BaseModel):
 
 @router.get("/teams", response_model=List[TeamInfo])
 async def get_teams_info():
-    """Get all team information."""
     try:
         reader = SheetsReader()
         teams = reader.load_teams()
@@ -641,7 +561,6 @@ async def get_teams_info():
 
 @router.get("/facilities", response_model=List[FacilityInfo])
 async def get_facilities_info():
-    """Get all facility/stadium information."""
     try:
         reader = SheetsReader()
         facilities = reader.load_facilities()
@@ -665,13 +584,11 @@ async def get_facilities_info():
 
 @router.get("/schools", response_model=List[SchoolInfo])
 async def get_schools_info():
-    """Get all school information."""
     try:
         reader = SheetsReader()
         schools = reader.load_schools()
         teams = reader.load_teams()
         
-        # Group teams by school
         school_teams: Dict[str, List[str]] = {}
         for team in teams:
             school_name = team.school.name
@@ -695,7 +612,6 @@ async def get_schools_info():
 
 @router.get("/rules", response_model=RulesInfo)
 async def get_rules_info():
-    """Get schedule creation rules."""
     try:
         reader = SheetsReader()
         rules = reader.load_rules()
