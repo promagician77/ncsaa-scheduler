@@ -195,6 +195,11 @@ class SchoolBasedScheduler:
         print(f"  Facilities with 8ft rims: {len(k1_facilities)}")
         for facility in k1_facilities:
             print(f"    - {facility.name}")
+        print(f"  NOTE: K-1 games require:")
+        print(f"    1. Facilities with 8ft rims (preferred)")
+        print(f"    2. OR their own school facility at START of day")
+        print(f"    3. LVBC must use Court 5 only")
+        print(f"    4. K-1 games use 1 official (not 2)")
         
         print(f"\n{'='*80}")
         print("DATA QUALITY CHECK COMPLETE")
@@ -415,6 +420,12 @@ class SchoolBasedScheduler:
         return False
     
     def _cluster_games_by_coach(self, games: List[Tuple[Team, Team, Division]]) -> List[Tuple[Team, Team, Division]]:
+        """
+        Cluster games by coach for multi-team coaches, and group REC divisions together.
+        
+        Rule 11: Competitive divisions can be in any order, but REC divisions 
+        (K-1 and 2-3) must be grouped together.
+        """
         coach_games = defaultdict(list)
         for game in games:
             team_a, team_b, division = game
@@ -430,6 +441,7 @@ class SchoolBasedScheduler:
         ordered_games = []
         used_games = set()
         
+        # First pass: Add games for multi-team coaches (back-to-back scheduling)
         for coach, coach_game_list in sorted(coach_games.items(), key=lambda x: -len(x[1])):
             if len(coach_game_list) > 1:
                 for game in coach_game_list:
@@ -438,13 +450,41 @@ class SchoolBasedScheduler:
                         ordered_games.append(game)
                         used_games.add(game_key)
         
+        # Second pass: Add remaining games
         for game in games:
             game_key = (game[0].id, game[1].id, game[2])
             if game_key not in used_games:
                 ordered_games.append(game)
                 used_games.add(game_key)
         
+        # Third pass: Group REC divisions together (Rule 11)
+        ordered_games = self._group_rec_divisions_together(ordered_games)
+        
         return ordered_games
+    
+    def _group_rec_divisions_together(self, games: List[Tuple[Team, Team, Division]]) -> List[Tuple[Team, Team, Division]]:
+        """
+        Ensure REC divisions (K-1 and 2-3) are grouped together at start or end.
+        
+        Rule 11: "Rec is the only divisions that need to be grouped together"
+        """
+        rec_games = []
+        comp_games = []
+        
+        for game in games:
+            team_a, team_b, division = game
+            if division == Division.ES_K1_REC or division == Division.ES_23_REC:
+                rec_games.append(game)
+            else:
+                comp_games.append(game)
+        
+        # If there are both REC and competitive games, group REC at the start
+        # This aligns with start-of-day requirements for REC divisions
+        if rec_games and comp_games:
+            return rec_games + comp_games
+        else:
+            # If only one type, return as-is
+            return games
     
     def _is_start_or_end_of_day(self, game_date: date, start_time: time) -> bool:
         day_of_week = game_date.weekday()
@@ -472,6 +512,17 @@ class SchoolBasedScheduler:
             return False
         
         return start_time == time_slots[0] or start_time == time_slots[-1]
+    
+    def _is_start_of_day(self, game_date: date, start_time: time) -> bool:
+        """Check if the given time is the first time slot of the day."""
+        day_of_week = game_date.weekday()
+        
+        if day_of_week < 5:
+            return start_time == WEEKNIGHT_START_TIME
+        elif day_of_week == 5:
+            return start_time == SATURDAY_START_TIME
+        else:
+            return False
     
     def _facility_belongs_to_school(self, facility_name: str, school_name: str) -> bool:
         facility_lower = facility_name.lower()
@@ -599,8 +650,21 @@ class SchoolBasedScheduler:
             has_k1_rec = any(div == Division.ES_K1_REC for _, _, div in ordered_games)
             has_non_k1_rec = any(div != Division.ES_K1_REC for _, _, div in ordered_games)
             
-            if has_k1_rec and not block.facility.has_8ft_rims:
-                continue
+            # K-1 games require 8ft rims OR must be at start of day at their own facility
+            if has_k1_rec:
+                if not block.facility.has_8ft_rims:
+                    # Check if it's their own facility AND start of day
+                    school_a_owns = self._facility_belongs_to_school(block.facility.name, matchup.school_a.name)
+                    school_b_owns = self._facility_belongs_to_school(block.facility.name, matchup.school_b.name)
+                    is_start_of_day = self._is_start_of_day(block.date, block.start_time)
+                    
+                    if not ((school_a_owns or school_b_owns) and is_start_of_day):
+                        continue
+                
+                # For LVBC, K-1 games must be on Court 5 only
+                if 'las vegas basketball center' in block.facility.name.lower() or 'lvbc' in block.facility.name.lower():
+                    if block.court_number != 5:
+                        continue
             
             if block.facility.has_8ft_rims and has_non_k1_rec:
                 continue
@@ -889,12 +953,16 @@ class SchoolBasedScheduler:
                             print(f"    [K-1 VIOLATION PREVENTED] {division.value} attempted on {slot.facility.name}")
                             continue
                         
+                        # Set officials count based on division
+                        officials_count = 1 if division == Division.ES_K1_REC else 2
+                        
                         game = Game(
                             id=f"{division.value}_{len(schedule.games)}",
                             home_team=home_team,
                             away_team=away_team,
                             time_slot=slot,
-                            division=division
+                            division=division,
+                            officials_count=officials_count
                         )
                         
                         schedule.add_game(game)
@@ -1059,12 +1127,16 @@ class SchoolBasedScheduler:
                             print(f"    [K-1 VIOLATION PREVENTED - REMATCH] {division.value} attempted on {slot.facility.name}")
                             continue
                         
+                        # Set officials count based on division
+                        officials_count = 1 if division == Division.ES_K1_REC else 2
+                        
                         game = Game(
                             id=f"{division.value}_{len(schedule.games)}",
                             home_team=home_team,
                             away_team=away_team,
                             time_slot=slot,
-                            division=division
+                            division=division,
+                            officials_count=officials_count
                         )
                         
                         schedule.add_game(game)
@@ -1177,6 +1249,22 @@ class SchoolBasedScheduler:
                         if time_slot_key in self.coach_time_slots[team_a.coach_name] or time_slot_key in self.coach_time_slots[team_b.coach_name]:
                             continue
                         
+                        # K-1 games require 8ft rims OR must be at start of day at their own facility
+                        if division == Division.ES_K1_REC:
+                            if not slot.facility.has_8ft_rims:
+                                # Check if it's their own facility AND start of day
+                                school_a_owns = self._facility_belongs_to_school(slot.facility.name, team_a.school.name)
+                                school_b_owns = self._facility_belongs_to_school(slot.facility.name, team_b.school.name)
+                                is_start_of_day = self._is_start_of_day(slot.date, slot.start_time)
+                                
+                                if not ((school_a_owns or school_b_owns) and is_start_of_day):
+                                    continue
+                            
+                            # For LVBC, K-1 games must be on Court 5 only
+                            if 'las vegas basketball center' in slot.facility.name.lower() or 'lvbc' in slot.facility.name.lower():
+                                if slot.court_number != 5:
+                                    continue
+                        
                         if slot.facility.has_8ft_rims and division != Division.ES_K1_REC:
                             continue
                         
@@ -1204,12 +1292,16 @@ class SchoolBasedScheduler:
                             home_team = team_a
                             away_team = team_b
                         
+                        # Set officials count based on division
+                        officials_count = 1 if division == Division.ES_K1_REC else 2
+                        
                         game = Game(
                             id=f"{division.value}_{len(schedule.games)}",
                             home_team=home_team,
                             away_team=away_team,
                             time_slot=slot,
-                            division=division
+                            division=division,
+                            officials_count=officials_count
                         )
                         schedule.games.append(game)
                         

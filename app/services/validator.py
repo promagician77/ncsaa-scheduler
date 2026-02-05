@@ -9,12 +9,13 @@ from collections import defaultdict
 
 from app.models import (
     Schedule, Game, Team, SchedulingConstraint,
-    ScheduleValidationResult, TeamScheduleStats
+    ScheduleValidationResult, TeamScheduleStats, Division
 )
 from app.core.config import (
     MAX_GAMES_PER_7_DAYS, MAX_GAMES_PER_14_DAYS,
     MAX_DOUBLEHEADERS_PER_SEASON, DOUBLEHEADER_BREAK_MINUTES,
-    PRIORITY_WEIGHTS
+    PRIORITY_WEIGHTS, WEEKNIGHT_START_TIME, SATURDAY_START_TIME,
+    ES_K1_REC_OFFICIALS
 )
 
 
@@ -56,6 +57,8 @@ class ScheduleValidator:
         self._check_facility_availability(schedule, result)
         self._check_home_away_balance(schedule, result)
         self._check_rival_matchups(schedule, result)
+        self._check_k1_rec_requirements(schedule, result)  # NEW: Check ES K-1 REC special requirements
+        self._check_rec_division_grouping(schedule, result)  # NEW: Check REC divisions are grouped together
         
         # Print summary
         print("\n" + "=" * 60)
@@ -505,3 +508,198 @@ class ScheduleValidator:
                     penalty_score=800.0
                 )
                 result.add_violation(constraint)
+    
+    def _check_k1_rec_requirements(self, schedule: Schedule, result: ScheduleValidationResult):
+        """
+        Validate ES K-1 REC special requirements (Rule 9).
+        
+        Rule 9 Requirements:
+        1. K-1 games use 1 official (not 2)
+        2. K-1 games need 8ft rim facilities OR own site at start of day
+        3. LVBC K-1 games must be on Court 5 only
+        4. Non-K-1 games cannot use 8ft rim facilities
+        """
+        print("\nValidating ES K-1 REC requirements...")
+        
+        for game in schedule.games:
+            # Check 1: K-1 games should have 1 official
+            if game.division == Division.ES_K1_REC:
+                if game.officials_count != ES_K1_REC_OFFICIALS:
+                    constraint = SchedulingConstraint(
+                        constraint_type="k1_officials_count",
+                        severity="hard",
+                        description=f"K-1 game {game.id} has {game.officials_count} officials (should be {ES_K1_REC_OFFICIALS})",
+                        affected_games=[game],
+                        penalty_score=100.0
+                    )
+                    result.add_violation(constraint)
+                
+                # Check 2: K-1 at non-8ft facilities must be at own site at start of day
+                if not game.time_slot.facility.has_8ft_rims:
+                    home_school_name = game.home_team.school.name
+                    away_school_name = game.away_team.school.name
+                    facility_name = game.time_slot.facility.name.lower()
+                    
+                    # Check if facility belongs to either school
+                    home_owns = self._facility_belongs_to_school(facility_name, home_school_name)
+                    away_owns = self._facility_belongs_to_school(facility_name, away_school_name)
+                    
+                    if not (home_owns or away_owns):
+                        constraint = SchedulingConstraint(
+                            constraint_type="k1_facility_requirement",
+                            severity="hard",
+                            description=f"K-1 game {game.id} at non-8ft facility {game.time_slot.facility.name} (not owned by playing schools)",
+                            affected_games=[game],
+                            penalty_score=500.0
+                        )
+                        result.add_violation(constraint)
+                    else:
+                        # Check if it's at start of day
+                        is_start = self._is_start_of_day(game.time_slot.date, game.time_slot.start_time)
+                        if not is_start:
+                            owner = home_school_name if home_owns else away_school_name
+                            constraint = SchedulingConstraint(
+                                constraint_type="k1_start_of_day",
+                                severity="hard",
+                                description=f"K-1 game {game.id} at {owner}'s facility but not at start of day ({game.time_slot.start_time})",
+                                affected_games=[game],
+                                penalty_score=300.0
+                            )
+                            result.add_violation(constraint)
+                
+                # Check 3: LVBC K-1 games must be on Court 5
+                if 'las vegas basketball center' in game.time_slot.facility.name.lower() or 'lvbc' in game.time_slot.facility.name.lower():
+                    if game.time_slot.court_number != 5:
+                        constraint = SchedulingConstraint(
+                            constraint_type="k1_lvbc_court_5",
+                            severity="hard",
+                            description=f"K-1 game {game.id} at LVBC on Court {game.time_slot.court_number} (must be Court 5)",
+                            affected_games=[game],
+                            penalty_score=400.0
+                        )
+                        result.add_violation(constraint)
+            
+            # Check 4: Non-K-1 games should not be on 8ft facilities
+            else:
+                if game.time_slot.facility.has_8ft_rims:
+                    constraint = SchedulingConstraint(
+                        constraint_type="non_k1_on_8ft_facility",
+                        severity="hard",
+                        description=f"Non-K-1 game {game.id} ({game.division.value}) scheduled at 8ft facility {game.time_slot.facility.name}",
+                        affected_games=[game],
+                        penalty_score=500.0
+                    )
+                    result.add_violation(constraint)
+    
+    def _facility_belongs_to_school(self, facility_name: str, school_name: str) -> bool:
+        """Check if a facility belongs to a school based on name matching."""
+        facility_lower = facility_name.lower()
+        school_lower = school_name.lower()
+        
+        # Handle common misspellings
+        facility_lower = facility_lower.replace('pincrest', 'pinecrest')
+        school_lower = school_lower.replace('pincrest', 'pinecrest')
+        
+        # Remove color suffixes from school name
+        color_suffixes = [' blue', ' black', ' white', ' red', ' gold', ' silver', 
+                         ' navy', ' green', ' purple', ' orange', ' yellow']
+        school_base = school_lower
+        for suffix in color_suffixes:
+            if school_base.endswith(suffix):
+                school_base = school_base[:-len(suffix)].strip()
+                break
+        
+        # Remove trailing tier numbers (e.g., "Doral 1A" -> "Doral")
+        import re
+        school_base = re.sub(r'\s+\d+[a-z]?$', '', school_base).strip()
+        
+        # Check if school name is in facility name
+        if school_base in facility_lower or school_lower in facility_lower:
+            return True
+        
+        return False
+    
+    def _is_start_of_day(self, game_date, start_time) -> bool:
+        """Check if the game is at the start of the day."""
+        day_of_week = game_date.weekday()
+        
+        if day_of_week < 5:  # Weeknight
+            return start_time == WEEKNIGHT_START_TIME
+        elif day_of_week == 5:  # Saturday
+            return start_time == SATURDAY_START_TIME
+        else:
+            return False
+    
+    def _check_rec_division_grouping(self, schedule: Schedule, result: ScheduleValidationResult):
+        """
+        Validate that REC divisions are grouped together (Rule 11).
+        
+        Rule 11: "Rec is the only divisions that need to be grouped together"
+        Competitive divisions can be in any order, but REC divisions (K-1 and 2-3)
+        should be scheduled consecutively.
+        """
+        print("\nValidating REC division grouping (Rule 11)...")
+        
+        # Group games by school matchup (same facility, date, consecutive times)
+        from collections import defaultdict
+        matchup_games = defaultdict(list)
+        
+        for game in schedule.games:
+            # Create key: (date, facility, school_a, school_b)
+            schools = tuple(sorted([game.home_team.school.name, game.away_team.school.name]))
+            key = (game.time_slot.date, game.time_slot.facility.name, schools[0], schools[1])
+            matchup_games[key].append(game)
+        
+        # Check each matchup for REC division grouping
+        for matchup_key, games in matchup_games.items():
+            if len(games) < 2:
+                continue  # Single game, no grouping needed
+            
+            # Sort games by time
+            sorted_games = sorted(games, key=lambda g: g.time_slot.start_time)
+            
+            # Find REC divisions and their positions
+            rec_positions = []
+            comp_positions = []
+            
+            for i, game in enumerate(sorted_games):
+                if game.division == Division.ES_K1_REC or game.division == Division.ES_23_REC:
+                    rec_positions.append(i)
+                else:
+                    comp_positions.append(i)
+            
+            # If we have both REC and competitive divisions, check grouping
+            if rec_positions and comp_positions:
+                # Check if REC divisions are consecutive
+                if len(rec_positions) > 1:
+                    # All REC games should be consecutive (no gaps)
+                    expected_consecutive = list(range(rec_positions[0], rec_positions[0] + len(rec_positions)))
+                    
+                    if rec_positions != expected_consecutive:
+                        # REC divisions are not grouped together
+                        rec_games = [sorted_games[i] for i in rec_positions]
+                        constraint = SchedulingConstraint(
+                            constraint_type="rec_division_grouping",
+                            severity="soft",  # Soft constraint - preference, not hard rule
+                            description=f"REC divisions not grouped together at {matchup_key[1]} on {matchup_key[0]}",
+                            affected_games=rec_games,
+                            penalty_score=30.0
+                        )
+                        result.add_violation(constraint)
+                
+                # Check if REC divisions are at start or end (best practice)
+                if rec_positions:
+                    all_at_start = all(i < len(comp_positions) or i == min(rec_positions + comp_positions) for i in rec_positions)
+                    all_at_end = all(i > max(comp_positions) for i in rec_positions) if comp_positions else True
+                    
+                    if not (all_at_start or all_at_end):
+                        # REC divisions are in the middle (not ideal)
+                        rec_games = [sorted_games[i] for i in rec_positions]
+                        constraint = SchedulingConstraint(
+                            constraint_type="rec_division_position",
+                            severity="soft",  # Soft constraint - best practice
+                            description=f"REC divisions in middle of schedule (prefer start/end) at {matchup_key[1]} on {matchup_key[0]}",
+                            affected_games=rec_games,
+                            penalty_score=10.0
+                        )
+                        result.add_violation(constraint)
