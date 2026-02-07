@@ -1,8 +1,3 @@
-"""
-Schedule validation module for the NCSAA Basketball Scheduling System.
-Validates schedules against all hard and soft constraints.
-"""
-
 from datetime import timedelta
 from typing import List, Dict, Set
 from collections import defaultdict
@@ -20,25 +15,10 @@ from app.core.config import (
 
 
 class ScheduleValidator:
-    """
-    Validates basketball game schedules against all constraints.
-    Checks both hard constraints (must be satisfied) and soft constraints (preferences).
-    """
-    
     def __init__(self):
-        """Initialize the validator."""
         pass
     
     def validate_schedule(self, schedule: Schedule) -> ScheduleValidationResult:
-        """
-        Validate a complete schedule against all constraints.
-        
-        Args:
-            schedule: The schedule to validate
-            
-        Returns:
-            ScheduleValidationResult with all violations found
-        """
         result = ScheduleValidationResult(is_valid=True)
         
         print("\n" + "=" * 60)
@@ -46,49 +26,31 @@ class ScheduleValidator:
         print("=" * 60)
         
         # Run all validation checks
-        self._check_facility_court_conflicts(schedule, result)  # NEW: Check for facility/court double-booking
+        self._check_facility_court_conflicts(schedule, result) 
         self._check_time_slot_conflicts(schedule, result)
-        self._check_team_double_booking(schedule, result)  # NEW: Check for teams in multiple locations at once
-        self._check_same_school_conflicts(schedule, result)  # NEW: Check for same school conflicts (simultaneous play)
-        self._check_same_school_matchups(schedule, result)  # NEW: Rule 23 - Same-school teams never play each other
-        self._check_duplicate_matchups(schedule, result)  # NEW: Check for excessive rematches
-        self._check_games_per_team(schedule, result)  # NEW: Rule 22 - Each team plays exactly 8 games
+        self._check_team_double_booking(schedule, result) 
+        self._check_same_school_conflicts(schedule, result) 
+        self._check_same_school_matchups(schedule, result) 
+        self._check_duplicate_matchups(schedule, result) 
+        self._check_games_per_team(schedule, result) 
         self._check_team_game_frequency(schedule, result)
         self._check_doubleheader_limits(schedule, result)
-        self._check_eighth_game_date(schedule, result)  # NEW: Check 8th game date restriction (Rule 17)
-        self._check_saturday_facility_consolidation(schedule, result)  # NEW: Rule 20 facility consolidation
+        self._check_eighth_game_date(schedule, result) 
+        self._check_saturday_facility_consolidation(schedule, result) 
         self._check_do_not_play_constraints(schedule, result)
         self._check_facility_availability(schedule, result)
         self._check_home_away_balance(schedule, result)
         self._check_rival_matchups(schedule, result)
-        self._check_k1_rec_requirements(schedule, result)  # NEW: Check ES K-1 REC special requirements
-        self._check_k1_cluster_restriction(schedule, result)  # NEW: Rule 21 - K-1 cluster-only scheduling
-        self._check_rec_division_grouping(schedule, result)  # NEW: Check REC divisions are grouped together
+        self._check_k1_rec_requirements(schedule, result) 
+        self._check_k1_cluster_restriction(schedule, result) 
+        self._check_rec_division_grouping(schedule, result) 
         
-        # Print summary
         print("\n" + "=" * 60)
-        print("Validation Results:")
-        print("=" * 60)
-        print(f"Valid: {result.is_valid}")
-        print(f"Hard Constraint Violations: {len(result.hard_constraint_violations)}")
-        print(f"Soft Constraint Violations: {len(result.soft_constraint_violations)}")
-        print(f"Total Penalty Score: {result.total_penalty_score:.2f}")
-        
-        if result.hard_constraint_violations:
-            print("\nHard Constraint Violations:")
-            for violation in result.hard_constraint_violations[:10]:  # Show first 10
-                print(f"  - {violation.constraint_type}: {violation.description}")
-        
-        if result.soft_constraint_violations:
-            print(f"\nSoft Constraint Violations: {len(result.soft_constraint_violations)}")
-        
         print("=" * 60)
         
         return result
     
     def _check_time_slot_conflicts(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check for time slot conflicts (same facility/court at same time)."""
-        # Group games by time slot key
         slot_games = defaultdict(list)
         
         for game in schedule.games:
@@ -96,7 +58,6 @@ class ScheduleValidator:
             key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
             slot_games[key].append(game)
         
-        # Check for conflicts
         for key, games in slot_games.items():
             if len(games) > 1:
                 constraint = SchedulingConstraint(
@@ -109,17 +70,10 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def _check_games_per_team(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check if each team plays exactly 8 games (Rule 22).
-        
-        Rule 22: Each team plays 8 games.
-        This is a fundamental requirement of the league.
-        """
         from app.core.config import GAMES_PER_TEAM
         
         print(f"\nValidating games per team (Rule 22: exactly {GAMES_PER_TEAM} games)...")
         
-        # Get all unique teams
         teams = set()
         for game in schedule.games:
             teams.add(game.home_team)
@@ -164,8 +118,6 @@ class ScheduleValidator:
             print(f"  ✅ All teams have exactly {GAMES_PER_TEAM} games")
     
     def _check_team_game_frequency(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if teams are playing too many games in short time periods."""
-        # Get all unique teams
         teams = set()
         for game in schedule.games:
             teams.add(game.home_team)
@@ -174,7 +126,6 @@ class ScheduleValidator:
         for team in teams:
             team_games = sorted(schedule.get_team_games(team), key=lambda g: g.time_slot.date)
             
-            # Check 7-day windows
             for i, game in enumerate(team_games):
                 games_in_7_days = [game]
                 
@@ -198,7 +149,6 @@ class ScheduleValidator:
                     )
                     result.add_violation(constraint)
             
-            # Check 14-day windows
             for i, game in enumerate(team_games):
                 games_in_14_days = [game]
                 
@@ -223,8 +173,6 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_doubleheader_limits(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if teams exceed doubleheader limits and have proper breaks."""
-        # Get all unique teams
         teams = set()
         for game in schedule.games:
             teams.add(game.home_team)
@@ -239,24 +187,19 @@ class ScheduleValidator:
                 game1 = team_games[i]
                 game2 = team_games[i + 1]
                 
-                # Check if same day
                 if game1.time_slot.date == game2.time_slot.date:
-                    # Calculate time between games
                     time1_end = game1.time_slot.end_time
                     time2_start = game2.time_slot.start_time
                     
-                    # Convert to minutes
                     end_minutes = time1_end.hour * 60 + time1_end.minute
                     start_minutes = time2_start.hour * 60 + time2_start.minute
                     gap_minutes = start_minutes - end_minutes
                     
-                    # If games are close together, it's a doubleheader
                     if 0 <= gap_minutes <= DOUBLEHEADER_BREAK_MINUTES + 30:
                         doubleheader_count += 1
                         game1.is_doubleheader = True
                         game2.is_doubleheader = True
                         
-                        # Rule 14: Check if doubleheader has sufficient break (>= 60 minutes)
                         if gap_minutes < DOUBLEHEADER_BREAK_MINUTES:
                             constraint = SchedulingConstraint(
                                 constraint_type="insufficient_doubleheader_break",
@@ -268,7 +211,6 @@ class ScheduleValidator:
                             )
                             result.add_violation(constraint)
             
-            # Rule 13: Check max doubleheaders per season
             if doubleheader_count > MAX_DOUBLEHEADERS_PER_SEASON:
                 constraint = SchedulingConstraint(
                     constraint_type="too_many_doubleheaders",
@@ -280,28 +222,22 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def _check_eighth_game_date(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if any team has their 8th game before February 21 (Rule 17)."""
         from datetime import datetime
         
         cutoff_date = datetime.strptime(EIGHTH_GAME_CUTOFF_DATE, "%Y-%m-%d").date()
         
-        # Get all unique teams
         teams = set()
         for game in schedule.games:
             teams.add(game.home_team)
             teams.add(game.away_team)
         
         for team in teams:
-            # Get all games for this team, sorted by date
             team_games = sorted(schedule.get_team_games(team), 
                               key=lambda g: g.time_slot.date)
             
-            # Check if team has 8 games (full season)
             if len(team_games) >= 8:
-                # Get the 8th game (index 7)
                 eighth_game = team_games[7]
                 
-                # Check if 8th game is before cutoff date
                 if eighth_game.time_slot.date < cutoff_date:
                     constraint = SchedulingConstraint(
                         constraint_type="eighth_game_too_early",
@@ -314,24 +250,19 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_saturday_facility_consolidation(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if Saturday games are consolidated to fewer facilities (Rule 20)."""
         from app.core.config import SATURDAY_TARGET_FACILITIES
         from collections import defaultdict
         
-        # Group games by Saturday date
         saturday_games = defaultdict(list)
         for game in schedule.games:
-            if game.time_slot.date.weekday() == 5:  # Saturday
+            if game.time_slot.date.weekday() == 5:
                 saturday_games[game.time_slot.date].append(game)
         
-        # Check facility spread for each Saturday
         for saturday_date, games in saturday_games.items():
             facilities_used = set(g.time_slot.facility.name for g in games)
             num_facilities = len(facilities_used)
             
-            # Soft constraint: Should use ≤target facilities (typically 4)
             if num_facilities > SATURDAY_TARGET_FACILITIES:
-                # Calculate utilization per facility
                 facility_game_count = defaultdict(int)
                 for game in games:
                     facility_game_count[game.time_slot.facility.name] += 1
@@ -350,8 +281,7 @@ class ScheduleValidator:
                 )
                 result.add_violation(constraint)
     
-    def _check_do_not_play_constraints(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if any do-not-play constraints are violated."""
+    def _check_do_not_play_constraints(self, schedule: Schedule, result: ScheduleValidationResult): 
         for game in schedule.games:
             team1 = game.home_team
             team2 = game.away_team
@@ -368,7 +298,6 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def _check_facility_availability(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if games are scheduled at unavailable facilities."""
         for game in schedule.games:
             facility = game.time_slot.facility
             game_date = game.time_slot.date
@@ -384,8 +313,6 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def _check_home_away_balance(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if teams have balanced home/away games (soft constraint)."""
-        # Get all unique teams
         teams = set()
         for game in schedule.games:
             teams.add(game.home_team)
@@ -397,10 +324,8 @@ class ScheduleValidator:
             if stats.total_games == 0:
                 continue
             
-            # Calculate imbalance
             imbalance = abs(stats.home_games - stats.away_games)
             
-            # Allow some imbalance, but penalize large differences
             if imbalance > 2:
                 constraint = SchedulingConstraint(
                     constraint_type="home_away_imbalance",
@@ -412,8 +337,6 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def _check_rival_matchups(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if rival teams are scheduled to play (soft constraint)."""
-        # Get all unique teams
         teams = set()
         for game in schedule.games:
             teams.add(game.home_team)
@@ -431,7 +354,6 @@ class ScheduleValidator:
                 if opponent:
                     opponents.add(opponent.id)
             
-            # Check if all rivals are scheduled
             missing_rivals = team.rivals - opponents
             
             if missing_rivals:
@@ -445,16 +367,6 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def get_team_stats(self, team: Team, schedule: Schedule) -> TeamScheduleStats:
-        """
-        Calculate statistics for a team's schedule.
-        
-        Args:
-            team: The team to analyze
-            schedule: The complete schedule
-            
-        Returns:
-            TeamScheduleStats with all statistics
-        """
         stats = TeamScheduleStats(team=team)
         
         team_games = schedule.get_team_games(team)
@@ -473,7 +385,6 @@ class ScheduleValidator:
             if opponent:
                 stats.opponents.append(opponent)
             
-            # Track games by week
             if schedule.season_start:
                 week_num = (game.time_slot.date - schedule.season_start).days // 7
                 stats.games_by_week[week_num] = stats.games_by_week.get(week_num, 0) + 1
@@ -481,15 +392,6 @@ class ScheduleValidator:
         return stats
     
     def generate_schedule_report(self, schedule: Schedule) -> str:
-        """
-        Generate a comprehensive report of the schedule.
-        
-        Args:
-            schedule: The schedule to report on
-            
-        Returns:
-            Formatted report string
-        """
         report = []
         report.append("=" * 80)
         report.append("SCHEDULE REPORT")
@@ -498,7 +400,6 @@ class ScheduleValidator:
         report.append(f"Total Games: {len(schedule.games)}")
         report.append("")
         
-        # Games by division
         report.append("Games by Division:")
         from app.models import Division
         for division in Division:
@@ -507,7 +408,6 @@ class ScheduleValidator:
                 report.append(f"  {division.value}: {len(div_games)} games")
         report.append("")
         
-        # Games by date
         report.append("Games by Date:")
         games_by_date = defaultdict(list)
         for game in schedule.games:
@@ -518,7 +418,6 @@ class ScheduleValidator:
             report.append(f"  {game_date}: {len(games)} games")
         report.append("")
         
-        # Team statistics
         report.append("Team Statistics:")
         teams = set()
         for game in schedule.games:
@@ -538,11 +437,6 @@ class ScheduleValidator:
         return "\n".join(report)
     
     def _check_facility_court_conflicts(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check for multiple games scheduled at the same facility/court at the same time.
-        This is a CRITICAL constraint - a court can only host one game at a time.
-        """
-        # Group games by facility/court/time
         facility_court_games = defaultdict(list)
         
         for game in schedule.games:
@@ -550,7 +444,6 @@ class ScheduleValidator:
             key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
             facility_court_games[key].append(game)
         
-        # Check for conflicts
         for key, games in facility_court_games.items():
             if len(games) > 1:
                 constraint = SchedulingConstraint(
@@ -558,16 +451,11 @@ class ScheduleValidator:
                     severity="hard",
                     description=f"Multiple games ({len(games)}) scheduled at {key[2]} Court {key[3]} on {key[0]} at {key[1]}",
                     affected_games=games,
-                    penalty_score=3000.0  # Highest penalty - physically impossible
+                    penalty_score=3000.0  # Very high penalty - this is physically impossible
                 )
                 result.add_violation(constraint)
     
     def _check_team_double_booking(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check for teams scheduled to play in multiple locations at the same time.
-        This is a CRITICAL constraint - teams cannot be in two places at once.
-        """
-        # Group games by time slot (date + start time)
         time_slot_games = defaultdict(list)
         
         for game in schedule.games:
@@ -575,7 +463,6 @@ class ScheduleValidator:
             time_key = (slot.date, slot.start_time)
             time_slot_games[time_key].append(game)
         
-        # Check each time slot for teams appearing multiple times
         for time_key, games in time_slot_games.items():
             team_appearances = defaultdict(list)
             
@@ -583,7 +470,6 @@ class ScheduleValidator:
                 team_appearances[game.home_team.id].append(game)
                 team_appearances[game.away_team.id].append(game)
             
-            # Check if any team appears more than once at this time
             for team_id, team_games in team_appearances.items():
                 if len(team_games) > 1:
                     constraint = SchedulingConstraint(
@@ -596,11 +482,6 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_same_school_conflicts(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check for teams from the same school playing at the same time.
-        This is a hard constraint to avoid scheduling conflicts.
-        """
-        # Group games by time slot
         time_slot_games = defaultdict(list)
         
         for game in schedule.games:
@@ -608,7 +489,6 @@ class ScheduleValidator:
             time_key = (slot.date, slot.start_time)
             time_slot_games[time_key].append(game)
         
-        # Check each time slot for same-school conflicts
         for time_key, games in time_slot_games.items():
             schools_playing = defaultdict(list)
             
@@ -616,7 +496,6 @@ class ScheduleValidator:
                 schools_playing[game.home_team.school.name].append(game)
                 schools_playing[game.away_team.school.name].append(game)
             
-            # Check if any school has multiple teams playing
             for school_name, school_games in schools_playing.items():
                 if len(school_games) > 1:
                     constraint = SchedulingConstraint(
@@ -629,18 +508,7 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_same_school_matchups(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check that teams from the same school never play each other (Rule 23).
-        
-        Rule 23: Some schools have 2 teams in a division. They should never play each other.
-        This is a CRITICAL hard constraint - same-school teams should NEVER be matched.
-        """
-        print("\nValidating same-school matchups (Rule 23: no same-school games)...")
-        
-        violations = 0
-        
         for game in schedule.games:
-            # Check if both teams from same school
             if game.home_team.school == game.away_team.school:
                 violations += 1
                 constraint = SchedulingConstraint(
@@ -659,10 +527,6 @@ class ScheduleValidator:
             print(f"  ✅ No same-school teams playing each other")
     
     def _check_duplicate_matchups(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check for teams playing each other more than twice.
-        Teams should play each other at most 2 times in a season.
-        """
         matchup_counts = defaultdict(int)
         matchup_games = defaultdict(list)
         
@@ -671,9 +535,8 @@ class ScheduleValidator:
             matchup_counts[matchup_key] += 1
             matchup_games[matchup_key].append(game)
         
-        # Check for excessive rematches
         for matchup_key, count in matchup_counts.items():
-            if count > 2:  # Teams should play at most twice
+            if count > 2:
                 constraint = SchedulingConstraint(
                     constraint_type="excessive_rematches",
                     severity="hard",
@@ -684,19 +547,7 @@ class ScheduleValidator:
                 result.add_violation(constraint)
     
     def _check_k1_rec_requirements(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Validate ES K-1 REC special requirements (Rule 9).
-        
-        Rule 9 Requirements:
-        1. K-1 games use 1 official (not 2)
-        2. K-1 games need 8ft rim facilities OR own site at start of day
-        3. LVBC K-1 games must be on Court 5 only
-        4. Non-K-1 games cannot use 8ft rim facilities
-        """
-        print("\nValidating ES K-1 REC requirements...")
-        
         for game in schedule.games:
-            # Check 1: K-1 games should have 1 official
             if game.division == Division.ES_K1_REC:
                 if game.officials_count != ES_K1_REC_OFFICIALS:
                     constraint = SchedulingConstraint(
@@ -708,13 +559,11 @@ class ScheduleValidator:
                     )
                     result.add_violation(constraint)
                 
-                # Check 2: K-1 at non-8ft facilities must be at own site at start of day
                 if not game.time_slot.facility.has_8ft_rims:
                     home_school_name = game.home_team.school.name
                     away_school_name = game.away_team.school.name
                     facility_name = game.time_slot.facility.name.lower()
                     
-                    # Check if facility belongs to either school
                     home_owns = self._facility_belongs_to_school(facility_name, home_school_name)
                     away_owns = self._facility_belongs_to_school(facility_name, away_school_name)
                     
@@ -728,7 +577,6 @@ class ScheduleValidator:
                         )
                         result.add_violation(constraint)
                     else:
-                        # Check if it's at start of day
                         is_start = self._is_start_of_day(game.time_slot.date, game.time_slot.start_time)
                         if not is_start:
                             owner = home_school_name if home_owns else away_school_name
@@ -741,7 +589,6 @@ class ScheduleValidator:
                             )
                             result.add_violation(constraint)
                 
-                # Check 3: LVBC K-1 games must be on Court 5
                 if 'las vegas basketball center' in game.time_slot.facility.name.lower() or 'lvbc' in game.time_slot.facility.name.lower():
                     if game.time_slot.court_number != 5:
                         constraint = SchedulingConstraint(
@@ -753,7 +600,6 @@ class ScheduleValidator:
                         )
                         result.add_violation(constraint)
             
-            # Check 4: Non-K-1 games should not be on 8ft facilities
             else:
                 if game.time_slot.facility.has_8ft_rims:
                     constraint = SchedulingConstraint(
@@ -766,14 +612,6 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_k1_cluster_restriction(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Check if ES K-1 REC teams only play within their cluster (Rule 21).
-        
-        Rule 21: ES K-1 REC teams should only play in their cluster/region.
-        Tiers do not apply to this division.
-        """
-        print("\nValidating ES K-1 REC cluster restrictions (Rule 21)...")
-        
         k1_violations = 0
         k1_missing_cluster = 0
         
@@ -782,9 +620,7 @@ class ScheduleValidator:
                 home_cluster = game.home_team.cluster
                 away_cluster = game.away_team.cluster
                 
-                # Check if both teams have cluster assigned
                 if home_cluster and away_cluster:
-                    # Check if different clusters (VIOLATION)
                     if home_cluster != away_cluster:
                         k1_violations += 1
                         constraint = SchedulingConstraint(
@@ -796,7 +632,6 @@ class ScheduleValidator:
                             penalty_score=500.0
                         )
                         result.add_violation(constraint)
-                # Check if either team missing cluster assignment (DATA ISSUE)
                 elif not home_cluster or not away_cluster:
                     k1_missing_cluster += 1
                     missing_team = game.home_team if not home_cluster else game.away_team
@@ -819,15 +654,12 @@ class ScheduleValidator:
             print(f"  ⚠️  Found {k1_missing_cluster} K-1 teams missing cluster assignment")
     
     def _facility_belongs_to_school(self, facility_name: str, school_name: str) -> bool:
-        """Check if a facility belongs to a school based on name matching."""
         facility_lower = facility_name.lower()
         school_lower = school_name.lower()
         
-        # Handle common misspellings
         facility_lower = facility_lower.replace('pincrest', 'pinecrest')
         school_lower = school_lower.replace('pincrest', 'pinecrest')
         
-        # Remove color suffixes from school name
         color_suffixes = [' blue', ' black', ' white', ' red', ' gold', ' silver', 
                          ' navy', ' green', ' purple', ' orange', ' yellow']
         school_base = school_lower
@@ -836,56 +668,39 @@ class ScheduleValidator:
                 school_base = school_base[:-len(suffix)].strip()
                 break
         
-        # Remove trailing tier numbers (e.g., "Doral 1A" -> "Doral")
         import re
         school_base = re.sub(r'\s+\d+[a-z]?$', '', school_base).strip()
         
-        # Check if school name is in facility name
         if school_base in facility_lower or school_lower in facility_lower:
             return True
         
         return False
     
     def _is_start_of_day(self, game_date, start_time) -> bool:
-        """Check if the game is at the start of the day."""
         day_of_week = game_date.weekday()
         
-        if day_of_week < 5:  # Weeknight
+        if day_of_week < 5:
             return start_time == WEEKNIGHT_START_TIME
-        elif day_of_week == 5:  # Saturday
+        elif day_of_week == 5:
             return start_time == SATURDAY_START_TIME
         else:
             return False
     
     def _check_rec_division_grouping(self, schedule: Schedule, result: ScheduleValidationResult):
-        """
-        Validate that REC divisions are grouped together (Rule 11).
-        
-        Rule 11: "Rec is the only divisions that need to be grouped together"
-        Competitive divisions can be in any order, but REC divisions (K-1 and 2-3)
-        should be scheduled consecutively.
-        """
-        print("\nValidating REC division grouping (Rule 11)...")
-        
-        # Group games by school matchup (same facility, date, consecutive times)
         from collections import defaultdict
         matchup_games = defaultdict(list)
         
         for game in schedule.games:
-            # Create key: (date, facility, school_a, school_b)
             schools = tuple(sorted([game.home_team.school.name, game.away_team.school.name]))
             key = (game.time_slot.date, game.time_slot.facility.name, schools[0], schools[1])
             matchup_games[key].append(game)
         
-        # Check each matchup for REC division grouping
         for matchup_key, games in matchup_games.items():
             if len(games) < 2:
-                continue  # Single game, no grouping needed
+                continue
             
-            # Sort games by time
             sorted_games = sorted(games, key=lambda g: g.time_slot.start_time)
             
-            # Find REC divisions and their positions
             rec_positions = []
             comp_positions = []
             
@@ -895,36 +710,30 @@ class ScheduleValidator:
                 else:
                     comp_positions.append(i)
             
-            # If we have both REC and competitive divisions, check grouping
             if rec_positions and comp_positions:
-                # Check if REC divisions are consecutive
                 if len(rec_positions) > 1:
-                    # All REC games should be consecutive (no gaps)
                     expected_consecutive = list(range(rec_positions[0], rec_positions[0] + len(rec_positions)))
                     
                     if rec_positions != expected_consecutive:
-                        # REC divisions are not grouped together
                         rec_games = [sorted_games[i] for i in rec_positions]
                         constraint = SchedulingConstraint(
                             constraint_type="rec_division_grouping",
-                            severity="soft",  # Soft constraint - preference, not hard rule
+                            severity="soft",
                             description=f"REC divisions not grouped together at {matchup_key[1]} on {matchup_key[0]}",
                             affected_games=rec_games,
                             penalty_score=30.0
                         )
                         result.add_violation(constraint)
                 
-                # Check if REC divisions are at start or end (best practice)
                 if rec_positions:
                     all_at_start = all(i < len(comp_positions) or i == min(rec_positions + comp_positions) for i in rec_positions)
                     all_at_end = all(i > max(comp_positions) for i in rec_positions) if comp_positions else True
                     
                     if not (all_at_start or all_at_end):
-                        # REC divisions are in the middle (not ideal)
                         rec_games = [sorted_games[i] for i in rec_positions]
                         constraint = SchedulingConstraint(
                             constraint_type="rec_division_position",
-                            severity="soft",  # Soft constraint - best practice
+                            severity="soft",
                             description=f"REC divisions in middle of schedule (prefer start/end) at {matchup_key[1]} on {matchup_key[0]}",
                             affected_games=rec_games,
                             penalty_score=10.0
