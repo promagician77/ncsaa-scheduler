@@ -9,7 +9,7 @@ from datetime import datetime, date
 from celery.result import AsyncResult
 
 from app.services.sheets_reader import SheetsReader
-from app.services.scheduler import SchoolBasedScheduler
+from app.services.scheduler import ScheduleOptimizer
 from app.services.validator import ScheduleValidator
 from app.core.config import (
     SEASON_START_DATE, SEASON_END_DATE,
@@ -138,7 +138,7 @@ async def generate_schedule(request: ScheduleRequest):
         
         print(f"Generating schedule for {len(teams)} teams...")
         print("Using REDESIGNED school-based scheduler (groups by schools, not divisions)")
-        optimizer = SchoolBasedScheduler(teams, facilities, rules)
+        optimizer = ScheduleOptimizer(teams, facilities, rules)
         schedule = optimizer.optimize_schedule()
         
         print("Validating schedule...")

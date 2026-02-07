@@ -4,7 +4,7 @@ Celery tasks for schedule generation.
 
 from app.core.celery_app import celery_app
 from app.services.sheets_reader import SheetsReader
-from app.services.scheduler import SchoolBasedScheduler
+from app.services.scheduler import ScheduleOptimizer
 from app.services.validator import ScheduleValidator
 from datetime import datetime
 import traceback
@@ -38,7 +38,7 @@ def generate_schedule_task(self):
         )
         
         # Generate schedule using school-based algorithm
-        optimizer = SchoolBasedScheduler(teams, facilities, rules)
+        optimizer = ScheduleOptimizer(teams, facilities, rules)
         schedule = optimizer.optimize_schedule()
         
         # Update progress

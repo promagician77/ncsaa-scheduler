@@ -76,6 +76,7 @@ SHEET_WEEK_PREFIX = "26 WINTER WEEK"  # Prefix for weekly schedule sheets
 # Scheduling Rules (Constants from the sheet)
 SEASON_START_DATE = "2026-01-05"
 SEASON_END_DATE = "2026-02-28"
+EIGHTH_GAME_CUTOFF_DATE = "2026-02-21"  # Rule 17: 8th game must be on or after this date
 
 # Game Time Rules
 GAME_DURATION_MINUTES = 60

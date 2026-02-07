@@ -15,7 +15,7 @@ from app.core.config import (
     MAX_GAMES_PER_7_DAYS, MAX_GAMES_PER_14_DAYS,
     MAX_DOUBLEHEADERS_PER_SEASON, DOUBLEHEADER_BREAK_MINUTES,
     PRIORITY_WEIGHTS, WEEKNIGHT_START_TIME, SATURDAY_START_TIME,
-    ES_K1_REC_OFFICIALS
+    ES_K1_REC_OFFICIALS, EIGHTH_GAME_CUTOFF_DATE
 )
 
 
@@ -53,6 +53,7 @@ class ScheduleValidator:
         self._check_duplicate_matchups(schedule, result)  # NEW: Check for excessive rematches
         self._check_team_game_frequency(schedule, result)
         self._check_doubleheader_limits(schedule, result)
+        self._check_eighth_game_date(schedule, result)  # NEW: Check 8th game date restriction (Rule 17)
         self._check_do_not_play_constraints(schedule, result)
         self._check_facility_availability(schedule, result)
         self._check_home_away_balance(schedule, result)
@@ -163,7 +164,7 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_doubleheader_limits(self, schedule: Schedule, result: ScheduleValidationResult):
-        """Check if teams exceed doubleheader limits."""
+        """Check if teams exceed doubleheader limits and have proper breaks."""
         # Get all unique teams
         teams = set()
         for game in schedule.games:
@@ -195,7 +196,20 @@ class ScheduleValidator:
                         doubleheader_count += 1
                         game1.is_doubleheader = True
                         game2.is_doubleheader = True
+                        
+                        # Rule 14: Check if doubleheader has sufficient break (>= 60 minutes)
+                        if gap_minutes < DOUBLEHEADER_BREAK_MINUTES:
+                            constraint = SchedulingConstraint(
+                                constraint_type="insufficient_doubleheader_break",
+                                severity="hard",
+                                description=f"{team.id} has doubleheader with only {gap_minutes} min break (requires {DOUBLEHEADER_BREAK_MINUTES} min) on {game1.time_slot.date}",
+                                affected_teams=[team],
+                                affected_games=[game1, game2],
+                                penalty_score=350.0
+                            )
+                            result.add_violation(constraint)
             
+            # Rule 13: Check max doubleheaders per season
             if doubleheader_count > MAX_DOUBLEHEADERS_PER_SEASON:
                 constraint = SchedulingConstraint(
                     constraint_type="too_many_doubleheaders",
@@ -205,6 +219,40 @@ class ScheduleValidator:
                     penalty_score=400.0
                 )
                 result.add_violation(constraint)
+    
+    def _check_eighth_game_date(self, schedule: Schedule, result: ScheduleValidationResult):
+        """Check if any team has their 8th game before February 21 (Rule 17)."""
+        from datetime import datetime
+        
+        cutoff_date = datetime.strptime(EIGHTH_GAME_CUTOFF_DATE, "%Y-%m-%d").date()
+        
+        # Get all unique teams
+        teams = set()
+        for game in schedule.games:
+            teams.add(game.home_team)
+            teams.add(game.away_team)
+        
+        for team in teams:
+            # Get all games for this team, sorted by date
+            team_games = sorted(schedule.get_team_games(team), 
+                              key=lambda g: g.time_slot.date)
+            
+            # Check if team has 8 games (full season)
+            if len(team_games) >= 8:
+                # Get the 8th game (index 7)
+                eighth_game = team_games[7]
+                
+                # Check if 8th game is before cutoff date
+                if eighth_game.time_slot.date < cutoff_date:
+                    constraint = SchedulingConstraint(
+                        constraint_type="eighth_game_too_early",
+                        severity="hard",
+                        description=f"{team.id} has 8th game on {eighth_game.time_slot.date} (must be on or after {cutoff_date})",
+                        affected_teams=[team],
+                        affected_games=[eighth_game],
+                        penalty_score=350.0
+                    )
+                    result.add_violation(constraint)
     
     def _check_do_not_play_constraints(self, schedule: Schedule, result: ScheduleValidationResult):
         """Check if any do-not-play constraints are violated."""
