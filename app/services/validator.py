@@ -49,8 +49,10 @@ class ScheduleValidator:
         self._check_facility_court_conflicts(schedule, result)  # NEW: Check for facility/court double-booking
         self._check_time_slot_conflicts(schedule, result)
         self._check_team_double_booking(schedule, result)  # NEW: Check for teams in multiple locations at once
-        self._check_same_school_conflicts(schedule, result)  # NEW: Check for same school conflicts
+        self._check_same_school_conflicts(schedule, result)  # NEW: Check for same school conflicts (simultaneous play)
+        self._check_same_school_matchups(schedule, result)  # NEW: Rule 23 - Same-school teams never play each other
         self._check_duplicate_matchups(schedule, result)  # NEW: Check for excessive rematches
+        self._check_games_per_team(schedule, result)  # NEW: Rule 22 - Each team plays exactly 8 games
         self._check_team_game_frequency(schedule, result)
         self._check_doubleheader_limits(schedule, result)
         self._check_eighth_game_date(schedule, result)  # NEW: Check 8th game date restriction (Rule 17)
@@ -60,6 +62,7 @@ class ScheduleValidator:
         self._check_home_away_balance(schedule, result)
         self._check_rival_matchups(schedule, result)
         self._check_k1_rec_requirements(schedule, result)  # NEW: Check ES K-1 REC special requirements
+        self._check_k1_cluster_restriction(schedule, result)  # NEW: Rule 21 - K-1 cluster-only scheduling
         self._check_rec_division_grouping(schedule, result)  # NEW: Check REC divisions are grouped together
         
         # Print summary
@@ -104,6 +107,61 @@ class ScheduleValidator:
                     penalty_score=1000.0
                 )
                 result.add_violation(constraint)
+    
+    def _check_games_per_team(self, schedule: Schedule, result: ScheduleValidationResult):
+        """
+        Check if each team plays exactly 8 games (Rule 22).
+        
+        Rule 22: Each team plays 8 games.
+        This is a fundamental requirement of the league.
+        """
+        from app.core.config import GAMES_PER_TEAM
+        
+        print(f"\nValidating games per team (Rule 22: exactly {GAMES_PER_TEAM} games)...")
+        
+        # Get all unique teams
+        teams = set()
+        for game in schedule.games:
+            teams.add(game.home_team)
+            teams.add(game.away_team)
+        
+        insufficient = 0
+        excessive = 0
+        
+        for team in teams:
+            team_games = schedule.get_team_games(team)
+            game_count = len(team_games)
+            
+            if game_count < GAMES_PER_TEAM:
+                insufficient += 1
+                constraint = SchedulingConstraint(
+                    constraint_type="insufficient_games",
+                    severity="hard",
+                    description=f"{team.id} has only {game_count} games (requires {GAMES_PER_TEAM})",
+                    affected_teams=[team],
+                    affected_games=team_games,
+                    penalty_score=1000.0
+                )
+                result.add_violation(constraint)
+            
+            elif game_count > GAMES_PER_TEAM:
+                excessive += 1
+                constraint = SchedulingConstraint(
+                    constraint_type="excessive_games",
+                    severity="hard",
+                    description=f"{team.id} has {game_count} games (requires {GAMES_PER_TEAM})",
+                    affected_teams=[team],
+                    affected_games=team_games,
+                    penalty_score=1000.0
+                )
+                result.add_violation(constraint)
+        
+        if insufficient > 0:
+            print(f"  ❌ {insufficient} teams have < {GAMES_PER_TEAM} games")
+        if excessive > 0:
+            print(f"  ❌ {excessive} teams have > {GAMES_PER_TEAM} games")
+        if insufficient == 0 and excessive == 0:
+            print(f"  ✅ All teams have exactly {GAMES_PER_TEAM} games")
     
     def _check_team_game_frequency(self, schedule: Schedule, result: ScheduleValidationResult):
         """Check if teams are playing too many games in short time periods."""
@@ -570,6 +628,36 @@ class ScheduleValidator:
                     )
                     result.add_violation(constraint)
     
+    def _check_same_school_matchups(self, schedule: Schedule, result: ScheduleValidationResult):
+        """
+        Check that teams from the same school never play each other (Rule 23).
+        
+        Rule 23: Some schools have 2 teams in a division. They should never play each other.
+        This is a CRITICAL hard constraint - same-school teams should NEVER be matched.
+        """
+        print("\nValidating same-school matchups (Rule 23: no same-school games)...")
+        
+        violations = 0
+        
+        for game in schedule.games:
+            # Check if both teams from same school
+            if game.home_team.school == game.away_team.school:
+                violations += 1
+                constraint = SchedulingConstraint(
+                    constraint_type="same_school_matchup",
+                    severity="hard",
+                    description=f"Same-school matchup: {game.home_team.id} vs {game.away_team.id} (both from {game.home_team.school.name})",
+                    affected_teams=[game.home_team, game.away_team],
+                    affected_games=[game],
+                    penalty_score=2000.0  # Very high penalty - this should NEVER happen
+                )
+                result.add_violation(constraint)
+        
+        if violations > 0:
+            print(f"  ❌ Found {violations} same-school matchups (CRITICAL ERROR)")
+        else:
+            print(f"  ✅ No same-school teams playing each other")
+    
     def _check_duplicate_matchups(self, schedule: Schedule, result: ScheduleValidationResult):
         """
         Check for teams playing each other more than twice.
@@ -676,6 +764,59 @@ class ScheduleValidator:
                         penalty_score=500.0
                     )
                     result.add_violation(constraint)
+    
+    def _check_k1_cluster_restriction(self, schedule: Schedule, result: ScheduleValidationResult):
+        """
+        Check if ES K-1 REC teams only play within their cluster (Rule 21).
+        
+        Rule 21: ES K-1 REC teams should only play in their cluster/region.
+        Tiers do not apply to this division.
+        """
+        print("\nValidating ES K-1 REC cluster restrictions (Rule 21)...")
+        
+        k1_violations = 0
+        k1_missing_cluster = 0
+        
+        for game in schedule.games:
+            if game.division == Division.ES_K1_REC:
+                home_cluster = game.home_team.cluster
+                away_cluster = game.away_team.cluster
+                
+                # Check if both teams have cluster assigned
+                if home_cluster and away_cluster:
+                    # Check if different clusters (VIOLATION)
+                    if home_cluster != away_cluster:
+                        k1_violations += 1
+                        constraint = SchedulingConstraint(
+                            constraint_type="k1_cross_cluster_violation",
+                            severity="hard",
+                            description=f"K-1 game {game.id} crosses clusters: {game.home_team.id} ({home_cluster.value}) vs {game.away_team.id} ({away_cluster.value})",
+                            affected_teams=[game.home_team, game.away_team],
+                            affected_games=[game],
+                            penalty_score=500.0
+                        )
+                        result.add_violation(constraint)
+                # Check if either team missing cluster assignment (DATA ISSUE)
+                elif not home_cluster or not away_cluster:
+                    k1_missing_cluster += 1
+                    missing_team = game.home_team if not home_cluster else game.away_team
+                    constraint = SchedulingConstraint(
+                        constraint_type="k1_missing_cluster",
+                        severity="soft",
+                        description=f"K-1 game {game.id}: {missing_team.id} has no cluster assigned",
+                        affected_teams=[missing_team],
+                        affected_games=[game],
+                        penalty_score=50.0
+                    )
+                    result.add_violation(constraint)
+        
+        if k1_violations > 0:
+            print(f"  ❌ Found {k1_violations} K-1 cross-cluster violations")
+        else:
+            print(f"  ✅ All K-1 games within same cluster")
+        
+        if k1_missing_cluster > 0:
+            print(f"  ⚠️  Found {k1_missing_cluster} K-1 teams missing cluster assignment")
     
     def _facility_belongs_to_school(self, facility_name: str, school_name: str) -> bool:
         """Check if a facility belongs to a school based on name matching."""

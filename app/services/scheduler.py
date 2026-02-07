@@ -18,7 +18,7 @@ from app.core.config import (
     WEEKNIGHT_START_TIME, WEEKNIGHT_END_TIME,
     SATURDAY_START_TIME, SATURDAY_END_TIME,
     GAME_DURATION_MINUTES, WEEKNIGHT_SLOTS,
-    MAX_GAMES_PER_7_DAYS, MAX_GAMES_PER_14_DAYS,
+    GAMES_PER_TEAM, MAX_GAMES_PER_7_DAYS, MAX_GAMES_PER_14_DAYS,
     MAX_DOUBLEHEADERS_PER_SEASON, DOUBLEHEADER_BREAK_MINUTES,
     NO_GAMES_ON_SUNDAY, REC_DIVISIONS, ES_K1_REC_PRIORITY_SITES,
     SATURDAY_PRIORITY_FACILITIES, SATURDAY_SECONDARY_FACILITIES, PRIORITY_WEIGHTS
@@ -163,6 +163,7 @@ class ScheduleOptimizer:
         Considers tier matching, geographic clustering, etc.
         
         CRITICAL: Teams from the same school should NEVER play each other (Rule #23)
+        Rule 21: For ES K-1 REC, tiers do NOT apply (only cluster matters)
         """
         # CRITICAL: Teams from same school CANNOT play each other
         if team1.school == team2.school:
@@ -170,11 +171,13 @@ class ScheduleOptimizer:
         
         score = 0
         
-        # Same tier is preferred
-        if team1.tier and team2.tier and team1.tier == team2.tier:
-            score += PRIORITY_WEIGHTS['tier_matching']
+        # Rule 21: For ES K-1 REC, tiers do NOT apply (skip tier matching)
+        # For other divisions, same tier is preferred
+        if team1.division != Division.ES_K1_REC and team2.division != Division.ES_K1_REC:
+            if team1.tier and team2.tier and team1.tier == team2.tier:
+                score += PRIORITY_WEIGHTS['tier_matching']
         
-        # Same geographic cluster is preferred
+        # Same geographic cluster is preferred (applies to ALL divisions)
         if team1.cluster and team2.cluster and team1.cluster == team2.cluster:
             score += PRIORITY_WEIGHTS['geographic_cluster']
         
@@ -348,6 +351,11 @@ class ScheduleOptimizer:
                 if team1.school == team2.school:
                     continue
                 
+                # Rule 21: ES K-1 REC teams can ONLY play within their cluster (HARD constraint)
+                if division == Division.ES_K1_REC:
+                    if team1.cluster and team2.cluster and team1.cluster != team2.cluster:
+                        continue  # Skip cross-cluster K-1 matchups entirely
+                
                 # Check do-not-play constraint
                 if team2.id in team1.do_not_play or team1.id in team2.do_not_play:
                     continue
@@ -364,7 +372,7 @@ class ScheduleOptimizer:
                 game_vars[(i, j)][idx] = model.NewBoolVar(var_name)
         
         # CONSTRAINT 1: Each team plays exactly 8 games (rule requirement)
-        target_games_per_team = 8  # All teams must play exactly 8 games
+        target_games_per_team = GAMES_PER_TEAM  # Rule 22: Each team must play exactly 8 games
         
         for team_idx in range(num_teams):
             team_games = []
@@ -518,7 +526,7 @@ class ScheduleOptimizer:
         """
         Optimized greedy algorithm for scheduling.
         Schedules games one by one, respecting hard constraints.
-        Ensures all teams play exactly 8 games.
+        Ensures all teams play exactly 8 games (Rule 22).
         """
         games = []
         used_slots = set()  # Local tracking for this division
@@ -605,6 +613,11 @@ class ScheduleOptimizer:
                 if team1.school == team2.school:
                     continue
                 
+                # Rule 21: ES K-1 REC teams can ONLY play within their cluster (HARD constraint)
+                if division == Division.ES_K1_REC:
+                    if team1.cluster and team2.cluster and team1.cluster != team2.cluster:
+                        continue  # Skip cross-cluster K-1 matchups entirely
+                
                 # Skip do-not-play
                 if team2.id in team1.do_not_play or team1.id in team2.do_not_play:
                     continue
@@ -615,12 +628,12 @@ class ScheduleOptimizer:
         # Sort by score (highest first)
         matchups.sort(reverse=True, key=lambda x: x[0])
         
-        # TARGET: All teams should play exactly 8 games (rule requirement)
-        target_games = 8
+        # TARGET: All teams should play exactly 8 games (Rule 22)
+        target_games = GAMES_PER_TEAM
         
         # FIRST PASS: Schedule matchups prioritizing high-quality matchups
         for score, team1, team2 in matchups:
-            # Skip if either team already has 8 games (strict limit)
+            # Skip if either team already has target games (strict limit)
             if team_games_count[team1.id] >= target_games or team_games_count[team2.id] >= target_games:
                 continue
             

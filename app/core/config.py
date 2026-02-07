@@ -86,6 +86,9 @@ SATURDAY_START_TIME = time(8, 0)    # 8:00 AM
 SATURDAY_END_TIME = time(18, 0)     # 6:00 PM
 WEEKNIGHT_SLOTS = 3  # Must use all 3 game slots on weeknights
 
+# Game Count Rules
+GAMES_PER_TEAM = 8  # Rule 22: Each team must play exactly 8 games per season
+
 # Game Frequency Rules
 MAX_GAMES_PER_7_DAYS = 2
 MAX_GAMES_PER_14_DAYS = 3
