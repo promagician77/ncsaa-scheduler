@@ -54,6 +54,7 @@ class ScheduleValidator:
         self._check_team_game_frequency(schedule, result)
         self._check_doubleheader_limits(schedule, result)
         self._check_eighth_game_date(schedule, result)  # NEW: Check 8th game date restriction (Rule 17)
+        self._check_saturday_facility_consolidation(schedule, result)  # NEW: Rule 20 facility consolidation
         self._check_do_not_play_constraints(schedule, result)
         self._check_facility_availability(schedule, result)
         self._check_home_away_balance(schedule, result)
@@ -253,6 +254,43 @@ class ScheduleValidator:
                         penalty_score=350.0
                     )
                     result.add_violation(constraint)
+    
+    def _check_saturday_facility_consolidation(self, schedule: Schedule, result: ScheduleValidationResult):
+        """Check if Saturday games are consolidated to fewer facilities (Rule 20)."""
+        from app.core.config import SATURDAY_TARGET_FACILITIES
+        from collections import defaultdict
+        
+        # Group games by Saturday date
+        saturday_games = defaultdict(list)
+        for game in schedule.games:
+            if game.time_slot.date.weekday() == 5:  # Saturday
+                saturday_games[game.time_slot.date].append(game)
+        
+        # Check facility spread for each Saturday
+        for saturday_date, games in saturday_games.items():
+            facilities_used = set(g.time_slot.facility.name for g in games)
+            num_facilities = len(facilities_used)
+            
+            # Soft constraint: Should use ≤target facilities (typically 4)
+            if num_facilities > SATURDAY_TARGET_FACILITIES:
+                # Calculate utilization per facility
+                facility_game_count = defaultdict(int)
+                for game in games:
+                    facility_game_count[game.time_slot.facility.name] += 1
+                
+                facility_summary = ", ".join(
+                    f"{name}: {count} games" for name, count in sorted(facility_game_count.items(), key=lambda x: -x[1])
+                )
+                
+                constraint = SchedulingConstraint(
+                    constraint_type="excessive_saturday_facility_spread",
+                    severity="soft",
+                    description=f"Saturday {saturday_date} uses {num_facilities} facilities (target: ≤{SATURDAY_TARGET_FACILITIES}) - {facility_summary}",
+                    affected_teams=[],
+                    affected_games=games,
+                    penalty_score=30.0 * (num_facilities - SATURDAY_TARGET_FACILITIES)
+                )
+                result.add_violation(constraint)
     
     def _check_do_not_play_constraints(self, schedule: Schedule, result: ScheduleValidationResult):
         """Check if any do-not-play constraints are violated."""

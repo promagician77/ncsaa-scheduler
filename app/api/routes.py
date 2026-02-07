@@ -21,7 +21,8 @@ from app.core.config import (
     NO_GAMES_ON_SUNDAY, US_HOLIDAYS,
     DIVISIONS, REC_DIVISIONS, TIERS, CLUSTERS,
     ES_K1_REC_RIM_HEIGHT, ES_K1_REC_OFFICIALS, ES_K1_REC_PRIORITY_SITES,
-    PRIORITY_WEIGHTS
+    SATURDAY_PRIORITY_FACILITIES, SATURDAY_SECONDARY_FACILITIES,
+    SATURDAY_TARGET_FACILITIES, PRIORITY_WEIGHTS
 )
 from app.core.celery_app import celery_app
 from app.tasks.scheduler_tasks import generate_schedule_task
@@ -454,6 +455,9 @@ async def get_schedule_info():
             "es_k1_rec_special": {
                 "priority_sites": ES_K1_REC_PRIORITY_SITES
             },
+            "saturday_priority_facilities": SATURDAY_PRIORITY_FACILITIES,  # Rule 19
+            "saturday_secondary_facilities": SATURDAY_SECONDARY_FACILITIES,  # Rule 20
+            "saturday_target_facilities": SATURDAY_TARGET_FACILITIES,  # Rule 20
             "priority_weights": PRIORITY_WEIGHTS
         }
         

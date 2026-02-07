@@ -124,6 +124,22 @@ ES_K1_REC_PRIORITY_SITES = [
     "Freedom Classical"
 ]
 
+# Saturday Priority Facilities (Rule 19)
+# These facilities should have all Saturday game slots filled to maximize utilization
+SATURDAY_PRIORITY_FACILITIES = [
+    "Las Vegas Basketball Center",
+    "Pinecrest Sloan Canyon",
+    "Supreme Courtz"
+]
+
+# Saturday Facility Consolidation (Rule 20)
+# Target: Use fewer, well-utilized facilities rather than spreading across many
+SATURDAY_TARGET_FACILITIES = 4  # Prefer using ≤4 facilities on Saturdays
+SATURDAY_SECONDARY_FACILITIES = [  # Next tier after priority facilities
+    "Somerset Skye Canyon",
+    "Faith Christian"
+]
+
 # Competitive Tiers
 TIERS = ["Tier 1", "Tier 2", "Tier 3", "Tier 4"]
 
@@ -142,7 +158,9 @@ PRIORITY_WEIGHTS = {
     "game_frequency": 85,          # Respect max games rules
     "doubleheader_limit": 80,      # Respect doubleheader rules
     "home_away_balance": 50,       # Balance home/away games
-    "weeknight_slots_full": 75     # Use all 3 weeknight slots
+    "weeknight_slots_full": 75,    # Use all 3 weeknight slots
+    "saturday_priority_facility_fill": 200,  # Rule 19: Maximize Saturday usage at key facilities
+    "saturday_secondary_facility_fill": 100  # Rule 20: Next tier for consolidation
 }
 
 # Optimization Settings

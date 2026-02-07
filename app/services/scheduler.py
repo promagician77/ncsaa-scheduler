@@ -21,7 +21,7 @@ from app.core.config import (
     MAX_GAMES_PER_7_DAYS, MAX_GAMES_PER_14_DAYS,
     MAX_DOUBLEHEADERS_PER_SEASON, DOUBLEHEADER_BREAK_MINUTES,
     NO_GAMES_ON_SUNDAY, REC_DIVISIONS, ES_K1_REC_PRIORITY_SITES,
-    PRIORITY_WEIGHTS
+    SATURDAY_PRIORITY_FACILITIES, SATURDAY_SECONDARY_FACILITIES, PRIORITY_WEIGHTS
 )
 
 
@@ -187,6 +187,51 @@ class ScheduleOptimizer:
             score += PRIORITY_WEIGHTS['respect_rivals']
         
         return score
+    
+    def _is_saturday_priority_facility(self, facility_name: str) -> bool:
+        """
+        Check if facility is one of the Saturday priority venues (Rule 19).
+        Handles name variations and typos (e.g., "Pincrest" vs "Pinecrest").
+        """
+        if not facility_name:
+            return False
+        
+        facility_lower = facility_name.lower()
+        
+        # Las Vegas Basketball Center (also matches "LVBC")
+        if 'las vegas basketball' in facility_lower or 'lvbc' in facility_lower:
+            return True
+        
+        # Pinecrest Sloan Canyon (handle both correct spelling and "Pincrest" typo)
+        # Also matches variations like "Pinecrest Sloan Canyon - K-1 GYM"
+        if 'sloan canyon' in facility_lower:
+            return True
+        
+        # Supreme Courtz (also matches "Supreme Courts" spelling)
+        if 'supreme court' in facility_lower:
+            return True
+        
+        return False
+    
+    def _is_saturday_secondary_facility(self, facility_name: str) -> bool:
+        """
+        Check if facility is one of the Saturday secondary venues (Rule 20).
+        These are the next tier after priority facilities for consolidation.
+        """
+        if not facility_name:
+            return False
+        
+        facility_lower = facility_name.lower()
+        
+        # Somerset Skye Canyon
+        if 'somerset' in facility_lower and 'skye canyon' in facility_lower:
+            return True
+        
+        # Faith Christian
+        if 'faith' in facility_lower and 'christian' in facility_lower:
+            return True
+        
+        return False
     
     def optimize_schedule(self) -> Schedule:
         """
@@ -379,13 +424,26 @@ class ScheduleOptimizer:
                 # Allow multiple games at same time if different courts
                 model.Add(sum(games_at_slot) <= 1)
         
-        # OBJECTIVE: Maximize matchup quality scores
+        # OBJECTIVE: Maximize matchup quality scores + Saturday priority facility usage
         objective_terms = []
         for (i, j) in matchups:
             score = matchup_scores[(i, j)]
             for idx in range(num_slots):
                 if idx in game_vars[(i, j)]:
+                    slot = self.time_slots[usable_slot_indices[idx]]
+                    
+                    # Base matchup score
                     objective_terms.append(game_vars[(i, j)][idx] * score)
+                    
+                    # Rule 19: Bonus for Saturday games at priority facilities
+                    if slot.date.weekday() == 5:  # Saturday
+                        if self._is_saturday_priority_facility(slot.facility.name):
+                            bonus = PRIORITY_WEIGHTS['saturday_priority_facility_fill']
+                            objective_terms.append(game_vars[(i, j)][idx] * bonus)
+                        # Rule 20: Secondary bonus for consolidation
+                        elif self._is_saturday_secondary_facility(slot.facility.name):
+                            bonus = PRIORITY_WEIGHTS['saturday_secondary_facility_fill']
+                            objective_terms.append(game_vars[(i, j)][idx] * bonus)
         
         if objective_terms:
             model.Maximize(sum(objective_terms))
@@ -483,6 +541,9 @@ class ScheduleOptimizer:
             self.global_used_slots = set()
         global_used_slots = self.global_used_slots  # Reference to global tracking
         
+        # Rule 20: Track Saturday facility utilization for consolidation
+        saturday_facility_games = defaultdict(int)  # facility_name → count of games scheduled
+        
         # Pre-filter time slots by division requirements and global availability
         usable_slots = []
         for slot in self.time_slots:
@@ -510,8 +571,29 @@ class ScheduleOptimizer:
             if not school_conflict:
                 usable_slots.append(slot)
         
-        # Sort slots by date and time for better scheduling
-        usable_slots.sort(key=lambda s: (s.date, s.start_time))
+        # Sort slots by priority: Saturday priority facilities first, then consolidation (Rules 19 & 20)
+        def slot_priority(slot):
+            priority = 0
+            
+            # Rule 19: Highest priority - Saturday at key facilities
+            if slot.date.weekday() == 5:  # Saturday
+                if self._is_saturday_priority_facility(slot.facility.name):
+                    priority = 10000
+                    # Rule 20: Within priority facilities, prefer those already in use (consolidation)
+                    priority += saturday_facility_games.get(slot.facility.name, 0) * 5
+                # Rule 20: Secondary facilities get medium priority
+                elif self._is_saturday_secondary_facility(slot.facility.name):
+                    priority = 5000
+                    # Also prefer secondary facilities already in use
+                    priority += saturday_facility_games.get(slot.facility.name, 0) * 5
+                # Other Saturday facilities: Lower priority, but still prefer those in use
+                else:
+                    priority = saturday_facility_games.get(slot.facility.name, 0) * 2
+            
+            # Return tuple: (-priority for descending, date for ascending, time for ascending)
+            return (-priority, slot.date, slot.start_time)
+        
+        usable_slots.sort(key=slot_priority)
         
         print(f"  Using {len(usable_slots)} filtered slots (from {len(self.time_slots)} total)")
         
@@ -611,6 +693,10 @@ class ScheduleOptimizer:
                 games.append(game)
                 used_slots.add(slot_key)
                 global_used_slots.add(slot_key)  # Mark as used globally
+                
+                # Rule 20: Track Saturday facility usage for consolidation
+                if slot.date.weekday() == 5:  # Saturday
+                    saturday_facility_games[slot.facility.name] += 1
                 
                 # Track that these teams are now busy at this time slot (prevents double-booking)
                 team_time_slots[team1.id].add(time_slot_key)
@@ -898,6 +984,10 @@ class ScheduleOptimizer:
                         games.append(game)
                         used_slots.add(slot_key)
                         global_used_slots.add(slot_key)  # Mark as used globally
+                        
+                        # Rule 20: Track Saturday facility usage
+                        if slot.date.weekday() == 5:
+                            saturday_facility_games[slot.facility.name] += 1
                         
                         # Track time slots
                         team_time_slots[team.id].add(time_slot_key)
