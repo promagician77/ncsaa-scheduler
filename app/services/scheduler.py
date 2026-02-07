@@ -6,19 +6,20 @@ import itertools
 
 from app.models import (
     Team, Facility, Game, TimeSlot, Division, Schedule,
-    SchedulingConstraint, ScheduleValidationResult
 )
 from app.core.config import (
     SEASON_START_DATE, SEASON_END_DATE, US_HOLIDAYS,
     WEEKNIGHT_START_TIME, WEEKNIGHT_END_TIME,
     SATURDAY_START_TIME, SATURDAY_END_TIME,
     GAME_DURATION_MINUTES, WEEKNIGHT_SLOTS,
-    NO_GAMES_ON_SUNDAY, PRIORITY_WEIGHTS
+    NO_GAMES_ON_SUNDAY, PRIORITY_WEIGHTS,
+    GAMES_PER_TEAM, MAX_GAMES_PER_7_DAYS
 )
+from app.core.logging_config import get_logger
 
+logger = get_logger(__name__)
 
 class ScheduleOptimizer:
-    
     def __init__(self, teams: List[Team], facilities: List[Facility], rules: Dict):
         self.teams = teams
         self.facilities = facilities
@@ -28,6 +29,7 @@ class ScheduleOptimizer:
         self.season_end = self._parse_date(rules.get('season_end', SEASON_END_DATE))
         
         self.holidays = set(rules.get('holidays', []))
+
         for holiday_str in US_HOLIDAYS:
             self.holidays.add(self._parse_date(holiday_str))
         
@@ -35,11 +37,11 @@ class ScheduleOptimizer:
         
         self.time_slots = self._generate_time_slots()
         
-        print(f"Scheduler initialized:")
-        print(f"  Season: {self.season_start} to {self.season_end}")
-        print(f"  Teams: {len(self.teams)}")
-        print(f"  Facilities: {len(self.facilities)}")
-        print(f"  Time slots: {len(self.time_slots)}")
+        logger.info(f"Scheduler initialized:")
+        logger.info(f"  Season: {self.season_start} to {self.season_end}")
+        logger.info(f"  Teams: {len(self.teams)}")
+        logger.info(f"  Facilities: {len(self.facilities)}")
+        logger.info(f"  Time slots: {len(self.time_slots)}")
     
     def _parse_date(self, date_input) -> date:
         if isinstance(date_input, date):
@@ -173,9 +175,9 @@ class ScheduleOptimizer:
         return False
     
     def optimize_schedule(self) -> Schedule:
-        print("\n" + "=" * 60)
-        print("Starting schedule optimization...")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Starting schedule optimization...")
+        logger.info("=" * 60)
         
         schedule = Schedule(
             season_start=self.season_start,
@@ -187,15 +189,15 @@ class ScheduleOptimizer:
         self.global_used_slots = set()
         
         for division, division_teams in self.teams_by_division.items():
-            print(f"\nScheduling division: {division.value}")
-            print(f"  Teams: {len(division_teams)}")
+            logger.info(f"Scheduling division: {division.value}")
+            logger.info(f"  Teams: {len(division_teams)}")
             
             if len(division_teams) < 2:
-                print(f"  Skipping - not enough teams")
+                logger.info(f"  Skipping - not enough teams")
                 continue
             
             if len(division_teams) >= 30:
-                print(f"  Using CP-SAT solver (large division, 30s timeout)...")
+                logger.info(f"  Using CP-SAT solver (large division, 30s timeout)...")
                 division_games = self._schedule_division(division, division_teams)
                 team_counts = defaultdict(int)
                 for game in division_games:
@@ -203,20 +205,20 @@ class ScheduleOptimizer:
                     team_counts[game.away_team.id] += 1
                 teams_under_8 = [t for t in division_teams if team_counts[t.id] < 8]
                 if teams_under_8:
-                    print(f"  CP-SAT incomplete ({len(teams_under_8)} teams < 8 games), switching to greedy algorithm...")
+                    logger.info(f"  CP-SAT incomplete ({len(teams_under_8)} teams < 8 games), switching to greedy algorithm...")
                     division_games = self._greedy_schedule_division(division, division_teams)
             else:
-                print(f"  Using optimized greedy algorithm...")
+                logger.info(f"  Using optimized greedy algorithm...")
                 division_games = self._greedy_schedule_division(division, division_teams)
             
             for game in division_games:
                 schedule.add_game(game)
             
-            print(f"  Generated {len(division_games)} games")
+            logger.info(f"  Generated {len(division_games)} games")
         
-        print("\n" + "=" * 60)
-        print(f"Schedule optimization complete: {len(schedule.games)} total games")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info(f"Schedule optimization complete: {len(schedule.games)} total games")
+        logger.info("=" * 60)
         
         return schedule
     
@@ -236,16 +238,9 @@ class ScheduleOptimizer:
             if hasattr(self, 'global_used_slots') and slot_key in self.global_used_slots:
                 continue
             
-            time_slot_key = (slot.date, slot.start_time)
-            school_conflict = False
-            if hasattr(self, 'global_school_time_slots'):
-                for school_name in schools_in_division:
-                    if time_slot_key in self.global_school_time_slots[school_name]:
-                        school_conflict = True
-                        break
-            
-            if not school_conflict:
-                usable_slot_indices.append(slot_idx)
+            # REMOVED: School conflict pre-filtering to allow multi-court usage
+            # Different teams from same school can now play simultaneously on different courts
+            usable_slot_indices.append(slot_idx)
         
         num_slots = len(usable_slot_indices)
         
@@ -351,13 +346,13 @@ class ScheduleOptimizer:
         solver.parameters.num_search_workers = 4  # Use parallel workers
         solver.parameters.log_search_progress = False
         
-        print(f"  Solving CP-SAT model (30s timeout)...")
+        logger.info(f"  Solving CP-SAT model (30s timeout)...")
         status = solver.Solve(model)
         
         games = []
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-            print(f"  Solution found (status: {solver.StatusName(status)})")
+            logger.info(f"  Solution found (status: {solver.StatusName(status)})")
             
             game_id = 0
             for (i, j) in matchups:
@@ -385,19 +380,17 @@ class ScheduleOptimizer:
                         
                         games.append(game)
                         
-                        time_slot_key = (slot.date, slot.start_time)
                         slot_key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
                         
-                        if hasattr(self, 'global_school_time_slots'):
-                            self.global_school_time_slots[home_team.school.name].add(time_slot_key)
-                            self.global_school_time_slots[away_team.school.name].add(time_slot_key)
+                        # REMOVED: School time slot tracking to allow multi-court usage
+                        # Teams from same school can now play simultaneously on different courts
                         
                         if hasattr(self, 'global_used_slots'):
                             self.global_used_slots.add(slot_key)
                         
                         game_id += 1
         else:
-            print(f"  No solution found (status: {solver.StatusName(status)})")
+            logger.info(f"  No solution found (status: {solver.StatusName(status)})")
             games = self._greedy_schedule_division(division, teams)
         
         return games
@@ -410,6 +403,7 @@ class ScheduleOptimizer:
         matchups_used = set()
         rematches_used = set()
         matchup_frequency = defaultdict(int)
+        matchups_by_date = defaultdict(set)  # Track matchups per date to prevent same-day duplicates
         
         team_time_slots = defaultdict(set)
         
@@ -434,16 +428,9 @@ class ScheduleOptimizer:
             if slot_key in global_used_slots:
                 continue
             
-            time_slot_key = (slot.date, slot.start_time)
-            schools_in_division = set(team.school.name for team in teams)
-            school_conflict = False
-            for school_name in schools_in_division:
-                if time_slot_key in school_time_slots[school_name]:
-                    school_conflict = True
-                    break
-            
-            if not school_conflict:
-                usable_slots.append(slot)
+            # REMOVED: School conflict pre-filtering to allow multi-court usage
+            # Different teams from same school can now play simultaneously on different courts
+            usable_slots.append(slot)
         
         def slot_priority(slot):
             priority = 0
@@ -462,7 +449,7 @@ class ScheduleOptimizer:
         
         usable_slots.sort(key=slot_priority)
         
-        print(f"  Using {len(usable_slots)} filtered slots (from {len(self.time_slots)} total)")
+        logger.info(f"  Using {len(usable_slots)} filtered slots (from {len(self.time_slots)} total)")
         
         matchups = []
         for i, team1 in enumerate(teams):
@@ -504,6 +491,7 @@ class ScheduleOptimizer:
                 can_play = True
                 time_slot_key = (slot.date, slot.start_time)
                 
+                # Check if teams are already busy at this time
                 for team in [team1, team2]:
                     if time_slot_key in team_time_slots[team.id]:
                         can_play = False
@@ -512,13 +500,14 @@ class ScheduleOptimizer:
                 if not can_play:
                     continue
                 
-                for team in [team1, team2]:
-                    if time_slot_key in school_time_slots[team.school.name]:
-                        can_play = False
-                        break
+                # CRITICAL FIX: Prevent same matchup on same day (no duplicate matchups on same date)
+                # This prevents Team A vs Team B at 5pm AND 6pm on same day
+                if matchup_key in matchups_by_date[slot.date]:
+                    continue  # Skip - these teams already playing/played today
                 
-                if not can_play:
-                    continue
+                # REMOVED: School conflict check to allow multi-court usage
+                # Different teams from same school can now play simultaneously on different courts
+                # The team-level check above already prevents individual team double-booking
                 
                 for team in [team1, team2]:
                     if team.id in team_last_game_date:
@@ -555,8 +544,9 @@ class ScheduleOptimizer:
                 team_time_slots[team1.id].add(time_slot_key)
                 team_time_slots[team2.id].add(time_slot_key)
                 
-                school_time_slots[team1.school.name].add(time_slot_key)
-                school_time_slots[team2.school.name].add(time_slot_key)
+                # REMOVED: School time slot tracking to allow multi-court usage
+                # school_time_slots[team1.school.name].add(time_slot_key)
+                # school_time_slots[team2.school.name].add(time_slot_key)
                 
                 team_games_count[team1.id] += 1
                 team_games_count[team2.id] += 1
@@ -564,6 +554,7 @@ class ScheduleOptimizer:
                 team_last_game_date[team2.id] = slot.date
                 matchups_used.add(matchup_key)
                 matchup_frequency[matchup_key] += 1
+                matchups_by_date[slot.date].add(matchup_key)  # Track this matchup on this date
                 
                 break
         
@@ -573,7 +564,7 @@ class ScheduleOptimizer:
         ]
         
         if teams_needing_games:
-            print(f"  Second pass: {len(teams_needing_games)} teams need more games")
+            logger.info(f"  Second pass: {len(teams_needing_games)} teams need more games")
             
             teams_needing_games.sort(key=lambda t: team_games_count[t.id])
             
@@ -647,13 +638,12 @@ class ScheduleOptimizer:
                         if not can_play:
                             continue
                         
-                        for t in [team, opponent]:
-                            if time_slot_key in school_time_slots[t.school.name]:
-                                can_play = False
-                                break
+                        # CRITICAL FIX: Prevent same matchup on same day in second pass too
+                        if matchup_key in matchups_by_date[slot.date]:
+                            continue  # Skip - these teams already playing/played today
                         
-                        if not can_play:
-                            continue
+                        # REMOVED: School conflict check to allow multi-court usage
+                        # Different teams from same school can now play simultaneously on different courts
                         
                         min_days = 2
                         
@@ -707,8 +697,9 @@ class ScheduleOptimizer:
                         team_time_slots[team.id].add(time_slot_key)
                         team_time_slots[opponent.id].add(time_slot_key)
                         
-                        school_time_slots[team.school.name].add(time_slot_key)
-                        school_time_slots[opponent.school.name].add(time_slot_key)
+                        # REMOVED: School time slot tracking to allow multi-court usage
+                        # school_time_slots[team.school.name].add(time_slot_key)
+                        # school_time_slots[opponent.school.name].add(time_slot_key)
                         
                         team_games_count[team.id] += 1
                         team_games_count[opponent.id] += 1
@@ -721,6 +712,8 @@ class ScheduleOptimizer:
                         else:
                             matchups_used.add(matchup_key)
                             matchup_frequency[matchup_key] += 1
+                        
+                        matchups_by_date[slot.date].add(matchup_key)  # Track this matchup on this date
                         
                         needed -= 1
                         scheduled = True
@@ -738,19 +731,19 @@ class ScheduleOptimizer:
                 
                 if not progress_made:
                     if pass_num < max_passes - 1:
-                        print(f"  Pass {pass_num + 1} complete, {len(teams_needing_games)} teams still need games")
+                        logger.info(f"  Pass {pass_num + 1} complete, {len(teams_needing_games)} teams still need games")
         
         teams_under_8 = [t for t in teams if team_games_count[t.id] < target_games]
         if teams_under_8:
-            print(f"  WARNING: {len(teams_under_8)} teams still have < 8 games:")
+            logger.warning(f"  WARNING: {len(teams_under_8)} teams still have < 8 games:")
             for team in teams_under_8[:15]:
-                print(f"    {team.id}: {team_games_count[team.id]} games")
+                logger.warning(f"    {team.id}: {team_games_count[team.id]} games")
             
             total_needed = sum(target_games - team_games_count[t.id] for t in teams_under_8)
-            print(f"  Total games needed: {total_needed}")
-            print(f"  Available slots remaining: {len(usable_slots) - len(used_slots)}")
+            logger.warning(f"  Total games needed: {total_needed}")
+            logger.warning(f"  Available slots remaining: {len(usable_slots) - len(used_slots)}")
             
-            print(f"  Attempting final desperate fill pass...")
+            logger.info(f"  Attempting final desperate fill pass...")
             for team in teams_under_8:
                 needed = target_games - team_games_count[team.id]
                 if needed <= 0:
@@ -770,12 +763,16 @@ class ScheduleOptimizer:
                         if time_slot_key in team_time_slots[team.id] or time_slot_key in team_time_slots[opponent.id]:
                             continue
                         
-                        if time_slot_key in school_time_slots[team.school.name] or time_slot_key in school_time_slots[opponent.school.name]:
-                            continue
+                        # REMOVED: School conflict check to allow multi-court usage
+                        # Different teams from same school can now play simultaneously on different courts
                         
                         matchup_key = tuple(sorted([team.id, opponent.id]))
                         if matchup_frequency[matchup_key] >= 2:
                             continue
+                        
+                        # CRITICAL FIX: Prevent same matchup on same day in desperate pass too
+                        if matchup_key in matchups_by_date[slot.date]:
+                            continue  # Skip - these teams already playing/played today
                         
                         game = Game(
                             id=f"{division.value}_{len(games)}",
@@ -794,14 +791,17 @@ class ScheduleOptimizer:
                         
                         team_time_slots[team.id].add(time_slot_key)
                         team_time_slots[opponent.id].add(time_slot_key)
-                        school_time_slots[team.school.name].add(time_slot_key)
-                        school_time_slots[opponent.school.name].add(time_slot_key)
+                        
+                        # REMOVED: School time slot tracking to allow multi-court usage
+                        # school_time_slots[team.school.name].add(time_slot_key)
+                        # school_time_slots[opponent.school.name].add(time_slot_key)
                         
                         team_games_count[team.id] += 1
                         team_games_count[opponent.id] += 1
                         team_last_game_date[team.id] = slot.date
                         team_last_game_date[opponent.id] = slot.date
                         matchup_frequency[matchup_key] += 1
+                        matchups_by_date[slot.date].add(matchup_key)  # Track this matchup on this date
                         needed -= 1
                         
                         if needed <= 0:
@@ -810,13 +810,13 @@ class ScheduleOptimizer:
                     if team_games_count[team.id] >= target_games:
                         break
         else:
-            print(f"  SUCCESS: All {len(teams)} teams have exactly 8 games!")
+            logger.info(f"  SUCCESS: All {len(teams)} teams have exactly 8 games!")
         
         final_teams_under_8 = [t for t in teams if team_games_count[t.id] < target_games]
         if final_teams_under_8:
-            print(f"  Final status: {len(final_teams_under_8)} teams still < 8 games")
-            print(f"  This indicates insufficient time slots or constraint conflicts")
+            logger.warning(f"  Final status: {len(final_teams_under_8)} teams still < 8 games")
+            logger.warning(f"  This indicates insufficient time slots or constraint conflicts")
         else:
-            print(f"  All teams have exactly 8 games - RULE SATISFIED")
+            logger.info(f"  All teams have exactly 8 games - RULE SATISFIED")
         
         return games

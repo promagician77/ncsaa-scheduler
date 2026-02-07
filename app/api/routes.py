@@ -1,7 +1,3 @@
-"""
-API routes for schedule generation and management.
-"""
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -27,13 +23,10 @@ from app.core.config import (
 from app.core.celery_app import celery_app
 from app.tasks.scheduler_tasks import generate_schedule_task
 
-
 router = APIRouter(prefix="/api", tags=["schedule"])
-
 
 class ScheduleRequest(BaseModel):
     force_regenerate: bool = False
-
 
 class GameResponse(BaseModel):
     id: str

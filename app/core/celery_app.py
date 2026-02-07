@@ -1,5 +1,9 @@
 from celery import Celery
 import os
+from app.core.logging_config import setup_logging
+
+# Initialize logging for Celery
+setup_logging()
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 

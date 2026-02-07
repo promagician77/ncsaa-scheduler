@@ -6,8 +6,11 @@ from app.core.celery_app import celery_app
 from app.services.sheets_reader import SheetsReader
 from app.services.scheduler import ScheduleOptimizer
 from app.services.validator import ScheduleValidator
+from app.core.logging_config import get_logger
 from datetime import datetime
 import traceback
+
+logger = get_logger(__name__)
 
 
 @celery_app.task(bind=True, name="generate_schedule")
@@ -30,6 +33,10 @@ def generate_schedule_task(self):
         # Load data from Google Sheets
         reader = SheetsReader()
         teams, facilities, rules = reader.load_all_data()
+
+        logger.info(f"Loaded {len(teams)} teams from Google Sheets")
+        logger.info(f"Loaded {len(facilities)} facilities from Google Sheets")
+        logger.info(f"Rules: {rules}")
         
         # Update progress
         self.update_state(
@@ -85,6 +92,10 @@ def generate_schedule_task(self):
         # Calculate generation time
         generation_time = (datetime.now() - start_time).total_seconds()
         
+        logger.info(f"Schedule generation completed in {generation_time:.2f} seconds")
+        logger.info(f"Total games generated: {len(schedule.games)}")
+        logger.info(f"Validation: {'PASSED' if validation_result.is_valid else 'FAILED'}")
+        
         # Prepare validation summary
         validation_summary = {
             "is_valid": validation_result.is_valid,
@@ -106,7 +117,8 @@ def generate_schedule_task(self):
     except Exception as e:
         # Return error result
         error_trace = traceback.format_exc()
-        print(f"Error in generate_schedule_task: {error_trace}")
+        logger.error(f"Error in generate_schedule_task: {str(e)}")
+        logger.error(f"Traceback: {error_trace}")
         
         return {
             "success": False,

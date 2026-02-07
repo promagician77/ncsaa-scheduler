@@ -508,6 +508,9 @@ class ScheduleValidator:
                     result.add_violation(constraint)
     
     def _check_same_school_matchups(self, schedule: Schedule, result: ScheduleValidationResult):
+        """Validate that teams from the same school never play each other (Rule 23)."""
+        violations = 0  # Initialize violations counter
+        
         for game in schedule.games:
             if game.home_team.school == game.away_team.school:
                 violations += 1

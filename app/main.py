@@ -2,6 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import routes
+from app.core.logging_config import setup_logging
+
+# Initialize logging
+setup_logging()
 
 app = FastAPI(
     title="NCSAA Basketball Scheduling API",
