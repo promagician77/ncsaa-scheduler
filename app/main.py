@@ -1,7 +1,3 @@
-"""
-Main FastAPI application for NCSAA Basketball Scheduling System.
-"""
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,7 +9,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for frontend (allow any localhost origin so dev on any port works)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,7 +19,6 @@ app.add_middleware(
     max_age=600,
 )
 
-# Include API routes
 app.include_router(routes.router)
 
 
