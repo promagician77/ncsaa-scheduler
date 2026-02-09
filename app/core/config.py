@@ -108,19 +108,29 @@ TIERS = ["Tier 1", "Tier 2", "Tier 3", "Tier 4"]
 CLUSTERS = ["East", "West", "North", "Henderson"]
 
 PRIORITY_WEIGHTS = {
-    "cluster_same_school": 100,
-    "cluster_same_coach": 90,
-    "respect_rivals": 80,
-    "respect_do_not_play": 100,
+    "school_consolidation": 150000,     
+    "coach_consolidation": 200000,       
+    "consecutive_slot_bonus": 100000,    
+    
     "geographic_cluster": 10000,
     "tier_matching": 400,
+    "respect_rivals": 80,
+    
+    # Constraints
+    "cluster_same_school": 100,
+    "cluster_same_coach": 90,
+    "respect_do_not_play": 100,
+    
+    # Facility Optimization
+    "saturday_priority_facility_fill": 200,
+    "saturday_secondary_facility_fill": 100,
     "facility_availability": 90,
+    
+    # Other
     "game_frequency": 85,
     "doubleheader_limit": 80,
-    "home_away_balance": 50,
     "weeknight_slots_full": 75,
-    "saturday_priority_facility_fill": 200,
-    "saturday_secondary_facility_fill": 100
+    "home_away_balance": 50
 }
 
 MAX_ITERATIONS = 10000
