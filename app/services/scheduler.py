@@ -24,8 +24,6 @@ class ScheduleOptimizer:
         self.facilities = facilities
         self.rules = rules
 
-        print(f"teams: {teams}")
-        
         self.season_start = self._parse_date(rules.get('season_start', SEASON_START_DATE))
         self.season_end = self._parse_date(rules.get('season_end', SEASON_END_DATE))
         
@@ -82,8 +80,6 @@ class ScheduleOptimizer:
         slots = []
         current_date = self.season_start
 
-        logger.info(f"Generating time slots from {current_date} to {self.season_end}")
-        
         while current_date <= self.season_end:
             if not self._is_valid_game_date(current_date):
                 current_date += timedelta(days=1)
@@ -97,8 +93,6 @@ class ScheduleOptimizer:
                     slot_start = datetime.combine(date.min, start_time) + timedelta(minutes=slot_num * GAME_DURATION_MINUTES)
                     slot_end = slot_start + timedelta(minutes=GAME_DURATION_MINUTES)
 
-                    logger.info(f"Adding time slot: {slot_start} to {slot_end}")
-                    
                     if slot_end.time() <= WEEKNIGHT_END_TIME:
                         for facility in self.facilities:
                             if facility.is_available(current_date):
@@ -282,7 +276,7 @@ class ScheduleOptimizer:
                 continue
             
             if len(division_teams) >= 30:
-                logger.info(f"  Using CP-SAT solver (large division, 30s timeout)...")
+                logger.info(f"  Using CP-SAT solver (large division, dynamic timeout)...")
                 division_games = self._schedule_division(division, division_teams)
                 team_counts = defaultdict(int)
                 for game in division_games:
@@ -316,7 +310,6 @@ class ScheduleOptimizer:
         num_teams = len(teams)
         
         usable_slot_indices = []
-        schools_in_division = set(team.school.name for team in teams)
         
         for slot_idx, slot in enumerate(self.time_slots):
             slot_key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
@@ -437,6 +430,12 @@ class ScheduleOptimizer:
             if games_at_slot:
                 model.Add(sum(games_at_slot) <= 1)
         
+        # Group teams by coach for clustering
+        coach_teams = defaultdict(list)
+        for team_idx, team in enumerate(teams):
+            if team.coach_name:
+                coach_teams[team.coach_name].append(team_idx)
+        
         objective_terms = []
         
         for (i, j) in matchups:
@@ -455,21 +454,163 @@ class ScheduleOptimizer:
                         bonus = PRIORITY_WEIGHTS['saturday_secondary_facility_fill']
                         objective_terms.append(game_vars[(i, j)][key] * bonus)
         
+        # COACH CLUSTERING CONSTRAINTS - Most important rule (LINEAR VERSION - CORRECT)
+        # Encourage games with same coach to be scheduled on same day, same facility, consecutive times
+        COACH_CONSOLIDATION_BONUS = PRIORITY_WEIGHTS['coach_consolidation']
+        COACH_CONSECUTIVE_BONUS = PRIORITY_WEIGHTS['consecutive_slot_bonus']
+        MAX_TIME_DIFF_MINUTES = 180  # Only consider games within 3 hours as "clustered"
+        
+        # Build mapping: (coach, date, facility) -> list of (game_var, slot_idx)
+        coach_date_facility_games = defaultdict(list)
+        
+        for (i, j) in matchups:
+            team_i = teams[i]
+            team_j = teams[j]
+            
+            for key in game_vars[(i, j)]:
+                idx, is_i_home = key
+                slot = self.time_slots[usable_slot_indices[idx]]
+                
+                # Add to coach_i's list
+                if team_i.coach_name:
+                    coach_date_facility_games[(team_i.coach_name, slot.date, slot.facility.name)].append(
+                        (game_vars[(i, j)][key], idx)
+                    )
+                
+                # Add to coach_j's list (only if different coach)
+                if team_j.coach_name and team_j.coach_name != team_i.coach_name:
+                    coach_date_facility_games[(team_j.coach_name, slot.date, slot.facility.name)].append(
+                        (game_vars[(i, j)][key], idx)
+                    )
+        
+        # Log statistics for debugging
+        logger.info(f"  Coach clustering: {len(coach_date_facility_games)} coach-date-facility combinations")
+        
+        # Add bonuses for coach consolidation (LINEAR constraints only)
+        consecutive_var_count = 0
+        for (coach_name, date, facility), games_info in coach_date_facility_games.items():
+            if len(games_info) < 2:
+                continue
+            
+            # Create a variable that's 1 if at least 2 games are scheduled at this (date, facility)
+            safe_facility = facility.replace(" ", "_").replace("'", "").replace("-", "_")[:30]
+            consolidation_var = model.NewBoolVar(f'cons_{coach_name[:15]}_{date.isoformat()}_{safe_facility}')
+            
+            # Get just the game variables
+            game_vars_list = [game_var for game_var, idx in games_info]
+            
+            # Constraint: consolidation_var = 1 if sum(games) >= 2
+            model.Add(sum(game_vars_list) >= 2).OnlyEnforceIf(consolidation_var)
+            model.Add(sum(game_vars_list) < 2).OnlyEnforceIf(consolidation_var.Not())
+            
+            # Add LINEAR bonus to objective
+            objective_terms.append(consolidation_var * COACH_CONSOLIDATION_BONUS)
+            
+            # BONUS: Check for consecutive games (60 minutes apart)
+            # Group games by slot index
+            slot_to_games = defaultdict(list)
+            for game_var, idx in games_info:
+                slot_to_games[idx].append(game_var)
+            
+            # Check pairs of slots that are consecutive in time
+            sorted_slot_indices = sorted(slot_to_games.keys())
+            for k in range(len(sorted_slot_indices)):
+                idx1 = sorted_slot_indices[k]
+                slot1 = self.time_slots[usable_slot_indices[idx1]]
+                slot1_minutes = slot1.start_time.hour * 60 + slot1.start_time.minute
+                
+                # Check next few slots to find consecutive ones (within MAX_TIME_DIFF_MINUTES)
+                for m in range(k + 1, len(sorted_slot_indices)):
+                    idx2 = sorted_slot_indices[m]
+                    slot2 = self.time_slots[usable_slot_indices[idx2]]
+                    slot2_minutes = slot2.start_time.hour * 60 + slot2.start_time.minute
+                    time_diff = abs(slot2_minutes - slot1_minutes)
+                    
+                    if time_diff > MAX_TIME_DIFF_MINUTES:
+                        break  # No point checking further slots
+                    
+                    # Special bonus for consecutive slots (60 minutes apart)
+                    if time_diff == 60:
+                        games_slot1 = slot_to_games[idx1]
+                        games_slot2 = slot_to_games[idx2]
+                        
+                        # Skip if either slot has no games (shouldn't happen but safe)
+                        if not games_slot1 or not games_slot2:
+                            continue
+                        
+                        # Create indicator variable: 1 if at least one game in slot1 AND one in slot2
+                        consecutive_var = model.NewBoolVar(
+                            f'consec_{coach_name[:15]}_{date.isoformat()}_{safe_facility}_{idx1}_{idx2}'
+                        )
+                        
+                        # FIXED: Create intermediate variables to avoid contradictory constraints
+                        has_game_slot1 = model.NewBoolVar(f'has1_{coach_name[:15]}_{idx1}')
+                        has_game_slot2 = model.NewBoolVar(f'has2_{coach_name[:15]}_{idx2}')
+                        
+                        # Link intermediate variables to actual games
+                        model.Add(sum(games_slot1) >= 1).OnlyEnforceIf(has_game_slot1)
+                        model.Add(sum(games_slot1) == 0).OnlyEnforceIf(has_game_slot1.Not())
+                        
+                        model.Add(sum(games_slot2) >= 1).OnlyEnforceIf(has_game_slot2)
+                        model.Add(sum(games_slot2) == 0).OnlyEnforceIf(has_game_slot2.Not())
+                        
+                        # consecutive_var = has_game_slot1 AND has_game_slot2
+                        model.AddBoolAnd([has_game_slot1, has_game_slot2]).OnlyEnforceIf(consecutive_var)
+                        model.AddBoolOr([has_game_slot1.Not(), has_game_slot2.Not()]).OnlyEnforceIf(consecutive_var.Not())
+                        
+                        # Add LINEAR bonus
+                        objective_terms.append(consecutive_var * COACH_CONSECUTIVE_BONUS)
+                        consecutive_var_count += 1
+        
+        logger.info(f"  Created {consecutive_var_count} consecutive slot bonus variables")
+        
+        # Add search hints to prioritize coach consolidation (BEFORE setting objective)
+        # Hints help solver find good solutions faster
+        hint_count = 0
+        for (coach_name, date, facility), games_info in coach_date_facility_games.items():
+            if len(games_info) >= 3:  # Good consolidation opportunity
+                for game_var, idx in games_info[:3]:  # Hint first 3 games
+                    model.AddHint(game_var, 1)  # Hints go on MODEL, not solver
+                    hint_count += 1
+        
+        if hint_count > 0:
+            logger.info(f"  Added {hint_count} search hints for coach consolidation")
+        
         if objective_terms:
             model.Maximize(sum(objective_terms))
         
-        solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = 30.0
-        solver.parameters.num_search_workers = 4
-        solver.parameters.log_search_progress = False
+        # Log model statistics
+        logger.info(f"  Model stats: {len(matchups)} matchups, {num_slots} usable slots, {len(teams)} teams")
         
-        logger.info(f"  Solving CP-SAT model with home/away constraints (30s timeout)...")
+        # Dynamic timeout based on problem size (prioritize accuracy)
+        problem_size = len(matchups) * num_slots
+        if problem_size > 100000:
+            timeout_seconds = 240.0  # 4 minutes for very large problems
+        elif problem_size > 50000:
+            timeout_seconds = 180.0  # 3 minutes for large problems
+        else:
+            timeout_seconds = 120.0  # 2 minutes for normal problems
+        
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = timeout_seconds
+        solver.parameters.num_search_workers = 8  # Use more parallel workers
+        solver.parameters.log_search_progress = False
+        solver.parameters.random_seed = 42  # Deterministic results
+        
+        # Additional optimizations for complex models
+        solver.parameters.linearization_level = 2  # More aggressive linearization
+        solver.parameters.cp_model_presolve = True  # Enable presolve
+        solver.parameters.symmetry_level = 2  # Detect symmetries
+        
+        logger.info(f"  Solving CP-SAT model with coach clustering + home/away constraints ({int(timeout_seconds)}s timeout)...")
         status = solver.Solve(model)
         
         games = []
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
             logger.info(f"  Solution found (status: {solver.StatusName(status)})")
+            logger.info(f"  Objective value: {solver.ObjectiveValue()}")
+            logger.info(f"  Solve time: {solver.WallTime():.2f}s")
             
             game_id = 0
             for (i, j) in matchups:
@@ -502,6 +643,25 @@ class ScheduleOptimizer:
                             self.global_used_slots.add(slot_key)
                         
                         game_id += 1
+            
+            # Log coach clustering statistics
+            coach_clustering_stats = defaultdict(lambda: defaultdict(int))
+            for game in games:
+                for team in [game.home_team, game.away_team]:
+                    if team.coach_name:
+                        key = (team.coach_name, game.time_slot.date, game.time_slot.facility.name)
+                        coach_clustering_stats[team.coach_name][key] += 1
+            
+            clustered_coaches = 0
+            for coach_name, date_facility_counts in coach_clustering_stats.items():
+                for key, count in date_facility_counts.items():
+                    if count >= 2:
+                        clustered_coaches += 1
+                        logger.info(f"  ✓ Coach '{coach_name}' has {count} games at {key[2]} on {key[1]}")
+                        break
+            
+            if clustered_coaches > 0:
+                logger.info(f"  SUCCESS: {clustered_coaches} coaches have clustered games!")
         else:
             logger.info(f"  No solution found (status: {solver.StatusName(status)})")
             games = self._greedy_schedule_division(division, teams)
