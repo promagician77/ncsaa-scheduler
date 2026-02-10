@@ -85,7 +85,7 @@ class Facility:
     unavailable_dates: List[date] = field(default_factory=list)
     max_courts: int = 1
     has_8ft_rims: bool = False  # For ES K-1 REC division
-    notes: str = ""
+    owned_by_school: Optional[str] = None  # School name that owns this facility (for home team assignment)
     
     def is_available(self, game_date: date) -> bool:
         """Check if facility is available on a given date."""

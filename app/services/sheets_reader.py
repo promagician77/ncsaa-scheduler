@@ -433,11 +433,27 @@ class SheetsReader:
                 
                 if full_facility_name not in facilities_dict:
                     notes = str(row[notes_col]).strip() if len(row) > notes_col else ''
+                    
+                    # Extract school name from notes by removing "home court" suffix
+                    owned_by_school = None
+                    if notes:
+                        # Remove "home court" and everything after it (case insensitive)
+                        # This handles cases like "School Name home court" or "School Home Court but other text"
+                        import re
+                        match = re.search(r'^(.*?)\s*home\s*court', notes, flags=re.IGNORECASE)
+                        if match:
+                            owned_by_school = match.group(1).strip()
+                        else:
+                            # If no "home court" found, keep the full notes value
+                            owned_by_school = notes
+                        
+                        if owned_by_school == '':
+                            owned_by_school = None
+                    
                     has_8ft_rims = '8 foot' in notes.lower() or '8ft' in notes.lower() or 'K-1' in court_name.upper()
                     
                     max_courts = 1
                     if 'court' in court_name.lower():
-                        import re
                         court_numbers = re.findall(r'\d+', court_name)
                         if court_numbers:
                             max_courts = len(court_numbers)
@@ -449,7 +465,7 @@ class SheetsReader:
                         address=facility_name,
                         max_courts=max_courts,
                         has_8ft_rims=has_8ft_rims,
-                        notes=notes
+                        owned_by_school=owned_by_school
                     )
                     
                     facilities_dict[full_facility_name] = facility
@@ -468,6 +484,14 @@ class SheetsReader:
             
             print(f"  Facilities with specific dates: {len(facilities_with_dates)}")
             print(f"  Facilities available all season: {len(facilities_without_dates)}")
+            
+            # Print facilities with ownership information
+            facilities_with_ownership = [f for f in facilities if f.owned_by_school]
+            if facilities_with_ownership:
+                print(f"  Facilities with ownership: {len(facilities_with_ownership)}")
+                for fac in facilities_with_ownership[:5]:  # Show first 5
+                    print(f"    - {fac.name} → owned by '{fac.owned_by_school}'")
+
             
         except Exception as e:
             print(f"Error loading facilities: {e}")

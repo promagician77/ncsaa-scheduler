@@ -167,9 +167,9 @@ async def get_scheduling_data():
                 "address": facility.address,
                 "max_courts": facility.max_courts,
                 "has_8ft_rims": facility.has_8ft_rims,
+                "owned_by_school": facility.owned_by_school,
                 "available_dates_count": len(facility.available_dates),
-                "unavailable_dates_count": len(facility.unavailable_dates),
-                "notes": facility.notes
+                "unavailable_dates_count": len(facility.unavailable_dates)
             })
         
         rules_data = {
@@ -270,7 +270,7 @@ class FacilityInfo(BaseModel):
     address: str
     max_courts: int
     has_8ft_rims: bool
-    notes: str
+    owned_by_school: Optional[str]
     available_dates: List[str]
     unavailable_dates: List[str]
 

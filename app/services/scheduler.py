@@ -23,6 +23,8 @@ class ScheduleOptimizer:
         self.teams = teams
         self.facilities = facilities
         self.rules = rules
+
+        print(f"teams: {teams}")
         
         self.season_start = self._parse_date(rules.get('season_start', SEASON_START_DATE))
         self.season_end = self._parse_date(rules.get('season_end', SEASON_END_DATE))
@@ -33,11 +35,23 @@ class ScheduleOptimizer:
             self.holidays.add(self._parse_date(holiday_str))
         
         self.teams_by_division = self._group_teams_by_division()
-        logger.info(f"Teams by division: {self.teams_by_division}")
 
         self.time_slots = self._generate_time_slots()
-        logger.info(f"Time slots: {self.time_slots}")
         logger.info(f"Scheduler is successfuly initialized with {len(self.time_slots)} time slots")
+    
+    def _determine_home_away_teams(self, team1: Team, team2: Team, facility: Facility) -> Tuple[Team, Team]:
+        if facility.owned_by_school:
+            facility_owner = facility.owned_by_school.strip().lower()
+            team1_school = team1.school.name.strip().lower()
+            team2_school = team2.school.name.strip().lower()
+            
+            if team1_school == facility_owner:
+                return (team1, team2)
+            
+            if team2_school == facility_owner:
+                return (team2, team1)
+        
+        return (team1, team2)
     
     def _parse_date(self, date_input) -> date:
         if isinstance(date_input, date):
@@ -174,46 +188,7 @@ class ScheduleOptimizer:
         
         return False
     
-    def _facility_belongs_to_school(self, facility_name: str, school_name: str) -> bool:
-        """
-        Rule 14: Check if a facility belongs to a school.
-        Used to determine home team (host school is home team).
-        """
-        if not facility_name or not school_name:
-            return False
-        
-        facility_lower = facility_name.lower()
-        school_lower = school_name.lower()
-        
-        # Fix common typo
-        facility_lower = facility_lower.replace('pincrest', 'pinecrest')
-        school_lower = school_lower.replace('pincrest', 'pinecrest')
-        
-        # Remove color suffixes from school name
-        color_suffixes = [' blue', ' black', ' white', ' red', ' gold', ' silver', 
-                         ' navy', ' green', ' purple', ' orange', ' yellow']
-        school_base = school_lower
-        for suffix in color_suffixes:
-            if school_base.endswith(suffix):
-                school_base = school_base[:-len(suffix)].strip()
-                break
-        
-        # Remove team numbers (e.g., "Somerset 1" -> "Somerset")
-        import re
-        school_base = re.sub(r'\s+\d+[a-z]?$', '', school_base).strip()
-        
-        # Check if school name is in facility name
-        if school_base in facility_lower or school_lower in facility_lower:
-            return True
-        
-        return False
-    
     def _get_consolidation_bonus(self, team: Team, slot: TimeSlot, scheduled_games: List[Game]) -> int:
-        """
-        Rule 15: Calculate bonus for consolidating school/coach games on same day.
-        This is THE MOST IMPORTANT rule - coaches with multiple teams should have
-        games on same day at same facility in consecutive slots.
-        """
         bonus = 0
         
         if not scheduled_games:
@@ -222,46 +197,68 @@ class ScheduleOptimizer:
         school_name = team.school.name
         coach_name = team.coach_name
         
-        # Check existing games on same date at same facility
         for game in scheduled_games:
             game_slot = game.time_slot
             
-            # Must be same date and same facility
             if game_slot.date != slot.date or game_slot.facility.name != slot.facility.name:
                 continue
             
-            # Check if game involves same school
             same_school_game = (game.home_team.school.name == school_name or 
                                game.away_team.school.name == school_name)
             
-            # Check if game involves same coach
             same_coach_game = (game.home_team.coach_name == coach_name or 
                               game.away_team.coach_name == coach_name)
             
             if same_school_game or same_coach_game:
-                # Calculate time difference in minutes
                 slot_minutes = slot.start_time.hour * 60 + slot.start_time.minute
                 game_slot_minutes = game_slot.start_time.hour * 60 + game_slot.start_time.minute
                 time_diff_minutes = abs(slot_minutes - game_slot_minutes)
                 
-                # MASSIVE bonus for consecutive slots (exactly 60 minutes apart)
                 if time_diff_minutes == 60:
                     if same_coach_game:
-                        bonus += PRIORITY_WEIGHTS['coach_consolidation']  # +200,000!
+                        bonus += PRIORITY_WEIGHTS['coach_consolidation']
                         logger.debug(f"  Consecutive coach bonus: {coach_name} at {slot.facility.name} on {slot.date}")
                     if same_school_game:
-                        bonus += PRIORITY_WEIGHTS['school_consolidation']  # +150,000!
+                        bonus += PRIORITY_WEIGHTS['school_consolidation']
                         logger.debug(f"  Consecutive school bonus: {school_name} at {slot.facility.name} on {slot.date}")
                 
-                # Large bonus for same day/facility (even if not consecutive)
-                elif time_diff_minutes <= 180:  # Within 3 hours
+                elif time_diff_minutes <= 180:
                     if same_coach_game:
-                        bonus += PRIORITY_WEIGHTS['coach_consolidation'] // 2  # +100,000
+                        bonus += PRIORITY_WEIGHTS['coach_consolidation'] // 2
                     if same_school_game:
-                        bonus += PRIORITY_WEIGHTS['school_consolidation'] // 2  # +75,000
+                        bonus += PRIORITY_WEIGHTS['school_consolidation'] // 2
         
         return bonus
     
+    def _calculate_slot_score_for_matchup(self, team1: Team, team2: Team, slot: TimeSlot, 
+                                          scheduled_games: List[Game]) -> int:
+        score = 0
+        
+        facility = slot.facility
+        if facility.owned_by_school:
+            facility_owner = facility.owned_by_school.strip().lower()
+            team1_school = team1.school.name.strip().lower()
+            team2_school = team2.school.name.strip().lower()
+            
+            if facility_owner == team1_school or facility_owner == team2_school:
+                score += 50000
+        
+        if slot.date.weekday() == 5:
+            if self._is_saturday_priority_facility(slot.facility.name):
+                score += 10000
+            elif self._is_saturday_secondary_facility(slot.facility.name):
+                score += 5000
+        
+        consolidation = 0
+        consolidation += self._get_consolidation_bonus(team1, slot, scheduled_games)
+        consolidation += self._get_consolidation_bonus(team2, slot, scheduled_games)
+        score += consolidation
+        
+        days_into_season = (slot.date - self.season_start).days
+        score -= days_into_season
+        
+        return score
+        
     def optimize_schedule(self) -> Schedule:
         logger.info("=" * 60)
         logger.info("Starting schedule optimization...")
@@ -351,8 +348,33 @@ class ScheduleOptimizer:
         for (i, j) in matchups:
             game_vars[(i, j)] = {}
             for idx, slot_idx in enumerate(usable_slot_indices):
-                var_name = f'game_t{i}_t{j}_s{idx}'
-                game_vars[(i, j)][idx] = model.NewBoolVar(var_name)
+                slot = self.time_slots[slot_idx]
+                facility = slot.facility
+                
+                team_i = teams[i]
+                team_j = teams[j]
+                
+                facility_owner = None
+                if facility.owned_by_school:
+                    facility_owner = facility.owned_by_school.strip().lower()
+                
+                team_i_school = team_i.school.name.strip().lower()
+                team_j_school = team_j.school.name.strip().lower()
+                
+                i_must_be_home = (facility_owner == team_i_school)
+                j_must_be_home = (facility_owner == team_j_school)
+                
+                if i_must_be_home:
+                    var_name = f'game_t{i}home_t{j}away_s{idx}'
+                    game_vars[(i, j)][(idx, True)] = model.NewBoolVar(var_name)
+                elif j_must_be_home:
+                    var_name = f'game_t{j}home_t{i}away_s{idx}'
+                    game_vars[(i, j)][(idx, False)] = model.NewBoolVar(var_name)
+                else:
+                    var_name_i_home = f'game_t{i}home_t{j}away_s{idx}'
+                    var_name_j_home = f'game_t{j}home_t{i}away_s{idx}'
+                    game_vars[(i, j)][(idx, True)] = model.NewBoolVar(var_name_i_home)
+                    game_vars[(i, j)][(idx, False)] = model.NewBoolVar(var_name_j_home)
         
         target_games_per_team = GAMES_PER_TEAM
         
@@ -360,22 +382,26 @@ class ScheduleOptimizer:
             team_games = []
             for (i, j) in matchups:
                 if i == team_idx or j == team_idx:
-                    for idx in range(num_slots):
-                        if idx in game_vars[(i, j)]:
-                            team_games.append(game_vars[(i, j)][idx])
+                    for key in game_vars[(i, j)]:
+                        team_games.append(game_vars[(i, j)][key])
             
             if team_games:
                 model.Add(sum(team_games) == target_games_per_team)
         
         for (i, j) in matchups:
-            model.Add(sum(game_vars[(i, j)][idx] for idx in range(num_slots) if idx in game_vars[(i, j)]) <= 1)
+            all_game_vars = [game_vars[(i, j)][key] for key in game_vars[(i, j)]]
+            if all_game_vars:
+                model.Add(sum(all_game_vars) <= 1)
         
         for idx in range(num_slots):
             for team_idx in range(num_teams):
                 games_at_slot = []
                 for (i, j) in matchups:
-                    if (i == team_idx or j == team_idx) and idx in game_vars[(i, j)]:
-                        games_at_slot.append(game_vars[(i, j)][idx])
+                    if i == team_idx or j == team_idx:
+                        if (idx, True) in game_vars[(i, j)]:
+                            games_at_slot.append(game_vars[(i, j)][(idx, True)])
+                        if (idx, False) in game_vars[(i, j)]:
+                            games_at_slot.append(game_vars[(i, j)][(idx, False)])
                 
                 if games_at_slot:
                     model.Add(sum(games_at_slot) <= 1)
@@ -392,8 +418,10 @@ class ScheduleOptimizer:
                 for (i, j) in matchups:
                     if i == team_idx or j == team_idx:
                         for idx in week_slot_indices:
-                            if idx in game_vars[(i, j)]:
-                                games_in_week.append(game_vars[(i, j)][idx])
+                            if (idx, True) in game_vars[(i, j)]:
+                                games_in_week.append(game_vars[(i, j)][(idx, True)])
+                            if (idx, False) in game_vars[(i, j)]:
+                                games_in_week.append(game_vars[(i, j)][(idx, False)])
                 
                 if games_in_week:
                     model.Add(sum(games_in_week) <= MAX_GAMES_PER_7_DAYS)
@@ -401,8 +429,10 @@ class ScheduleOptimizer:
         for idx in range(num_slots):
             games_at_slot = []
             for (i, j) in matchups:
-                if idx in game_vars[(i, j)]:
-                    games_at_slot.append(game_vars[(i, j)][idx])
+                if (idx, True) in game_vars[(i, j)]:
+                    games_at_slot.append(game_vars[(i, j)][(idx, True)])
+                if (idx, False) in game_vars[(i, j)]:
+                    games_at_slot.append(game_vars[(i, j)][(idx, False)])
             
             if games_at_slot:
                 model.Add(sum(games_at_slot) <= 1)
@@ -411,31 +441,29 @@ class ScheduleOptimizer:
         
         for (i, j) in matchups:
             score = matchup_scores[(i, j)]
-            for idx in range(num_slots):
-                if idx in game_vars[(i, j)]:
-                    slot = self.time_slots[usable_slot_indices[idx]]
-                    
-                    # Base matchup score (includes geographic clustering, tier matching, rivals)
-                    objective_terms.append(game_vars[(i, j)][idx] * score)
-                    
-                    # Saturday facility bonuses
-                    if slot.date.weekday() == 5:
-                        if self._is_saturday_priority_facility(slot.facility.name):
-                            bonus = PRIORITY_WEIGHTS['saturday_priority_facility_fill']
-                            objective_terms.append(game_vars[(i, j)][idx] * bonus)
-                        elif self._is_saturday_secondary_facility(slot.facility.name):
-                            bonus = PRIORITY_WEIGHTS['saturday_secondary_facility_fill']
-                            objective_terms.append(game_vars[(i, j)][idx] * bonus)
+            for key in game_vars[(i, j)]:
+                idx, is_i_home = key
+                slot = self.time_slots[usable_slot_indices[idx]]
+                
+                objective_terms.append(game_vars[(i, j)][key] * score)
+                
+                if slot.date.weekday() == 5:
+                    if self._is_saturday_priority_facility(slot.facility.name):
+                        bonus = PRIORITY_WEIGHTS['saturday_priority_facility_fill']
+                        objective_terms.append(game_vars[(i, j)][key] * bonus)
+                    elif self._is_saturday_secondary_facility(slot.facility.name):
+                        bonus = PRIORITY_WEIGHTS['saturday_secondary_facility_fill']
+                        objective_terms.append(game_vars[(i, j)][key] * bonus)
         
         if objective_terms:
             model.Maximize(sum(objective_terms))
         
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = 30.0
-        solver.parameters.num_search_workers = 4  # Use parallel workers
+        solver.parameters.num_search_workers = 4
         solver.parameters.log_search_progress = False
         
-        logger.info(f"  Solving CP-SAT model (30s timeout)...")
+        logger.info(f"  Solving CP-SAT model with home/away constraints (30s timeout)...")
         status = solver.Solve(model)
         
         games = []
@@ -445,28 +473,18 @@ class ScheduleOptimizer:
             
             game_id = 0
             for (i, j) in matchups:
-                for idx in range(num_slots):
-                    if idx in game_vars[(i, j)] and solver.Value(game_vars[(i, j)][idx]):
-                        team1 = teams[i]
-                        team2 = teams[j]
+                for key in game_vars[(i, j)]:
+                    if solver.Value(game_vars[(i, j)][key]):
+                        idx, is_i_home = key
                         actual_slot_idx = usable_slot_indices[idx]
                         slot = self.time_slots[actual_slot_idx]
-                        
-                        # Rule 14: Host school is home team
-                        # Check if facility belongs to either school
-                        team1_is_host = self._facility_belongs_to_school(slot.facility.name, team1.school.name)
-                        team2_is_host = self._facility_belongs_to_school(slot.facility.name, team2.school.name)
-                        
-                        if team1_is_host and not team2_is_host:
-                            home_team = team1
-                            away_team = team2
-                        elif team2_is_host and not team1_is_host:
-                            home_team = team2
-                            away_team = team1
+                                
+                        if is_i_home:
+                            home_team = teams[i]
+                            away_team = teams[j]
                         else:
-                            # Neither or both are hosts - default to team1 as home
-                            home_team = team1
-                            away_team = team2
+                            home_team = teams[j]
+                            away_team = teams[i]
                         
                         game = Game(
                             id=f"{division.value}_{game_id}",
@@ -498,7 +516,7 @@ class ScheduleOptimizer:
         matchups_used = set()
         rematches_used = set()
         matchup_frequency = defaultdict(int)
-        matchups_by_date = defaultdict(set)  # Track matchups per date to prevent same-day duplicates
+        matchups_by_date = defaultdict(set)
         
         team_time_slots = defaultdict(set)
         
@@ -523,14 +541,12 @@ class ScheduleOptimizer:
             if slot_key in global_used_slots:
                 continue
             
-            # REMOVED: School conflict pre-filtering to allow multi-court usage
-            # Different teams from same school can now play simultaneously on different courts
             usable_slots.append(slot)
         
         def slot_priority(slot):
             priority = 0
             
-            if slot.date.weekday() == 5:  # Saturday
+            if slot.date.weekday() == 5:
                 if self._is_saturday_priority_facility(slot.facility.name):
                     priority = 10000
                     priority += saturday_facility_games.get(slot.facility.name, 0) * 5
@@ -574,7 +590,6 @@ class ScheduleOptimizer:
             if matchup_key in matchups_used:
                 continue
             
-            # Rule 15: Evaluate ALL valid slots and pick best one with consolidation bonus
             valid_slots_with_scores = []
             
             for slot in usable_slots:
@@ -586,7 +601,6 @@ class ScheduleOptimizer:
                 can_play = True
                 time_slot_key = (slot.date, slot.start_time)
                 
-                # Check if teams are already busy at this time
                 for team in [team1, team2]:
                     if time_slot_key in team_time_slots[team.id]:
                         can_play = False
@@ -595,11 +609,9 @@ class ScheduleOptimizer:
                 if not can_play:
                     continue
                 
-                # CRITICAL FIX: Prevent same matchup on same day
                 if matchup_key in matchups_by_date[slot.date]:
                     continue
                 
-                # Check min days between games
                 for team in [team1, team2]:
                     if team.id in team_last_game_date:
                         days_since = (slot.date - team_last_game_date[team.id]).days
@@ -610,40 +622,21 @@ class ScheduleOptimizer:
                 if not can_play:
                     continue
                 
-                # Calculate consolidation bonus for this slot
-                consolidation_bonus = 0
-                consolidation_bonus += self._get_consolidation_bonus(team1, slot, games)
-                consolidation_bonus += self._get_consolidation_bonus(team2, slot, games)
+                slot_score = self._calculate_slot_score_for_matchup(team1, team2, slot, games)
                 
-                # Add to valid slots with score
-                valid_slots_with_scores.append((consolidation_bonus, slot))
+                valid_slots_with_scores.append((slot_score, slot))
             
-            # Pick slot with highest consolidation bonus
             if not valid_slots_with_scores:
-                continue  # No valid slot for this matchup
+                continue
             
-            # Sort by consolidation bonus (highest first)
             valid_slots_with_scores.sort(reverse=True, key=lambda x: x[0])
-            best_consolidation_bonus, best_slot = valid_slots_with_scores[0]
+            best_score, best_slot = valid_slots_with_scores[0]
             
             slot = best_slot
             slot_key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
             time_slot_key = (slot.date, slot.start_time)
             
-            # Rule 14: Host school is home team
-            team1_is_host = self._facility_belongs_to_school(slot.facility.name, team1.school.name)
-            team2_is_host = self._facility_belongs_to_school(slot.facility.name, team2.school.name)
-            
-            if team1_is_host and not team2_is_host:
-                home_team = team1
-                away_team = team2
-            elif team2_is_host and not team1_is_host:
-                home_team = team2
-                away_team = team1
-            else:
-                # Neither or both are hosts - default to team1 as home
-                home_team = team1
-                away_team = team2
+            home_team, away_team = self._determine_home_away_teams(team1, team2, slot.facility)
             
             game = Game(
                 id=f"{division.value}_{len(games)}",
@@ -657,7 +650,7 @@ class ScheduleOptimizer:
             used_slots.add(slot_key)
             global_used_slots.add(slot_key)
             
-            if slot.date.weekday() == 5:  # Saturday
+            if slot.date.weekday() == 5:
                 saturday_facility_games[slot.facility.name] += 1
             
             team_time_slots[team1.id].add(time_slot_key)
@@ -671,8 +664,10 @@ class ScheduleOptimizer:
             matchup_frequency[matchup_key] += 1
             matchups_by_date[slot.date].add(matchup_key)
             
-            if best_consolidation_bonus > 0:
-                logger.debug(f"  Consolidated: {team1.id} vs {team2.id} at {slot.facility.name} on {slot.date} (bonus: {best_consolidation_bonus})")
+            if best_score > 50000:
+                logger.debug(f"  Home game: {home_team.id} vs {away_team.id} at {slot.facility.name} on {slot.date} (score: {best_score})")
+            elif best_score > 1000:
+                logger.debug(f"  Consolidated: {team1.id} vs {team2.id} at {slot.facility.name} on {slot.date} (score: {best_score})")
         
         teams_needing_games = [
             team for team in teams 
@@ -738,7 +733,6 @@ class ScheduleOptimizer:
                     
                     scheduled = False
                     
-                    # Rule 15: Evaluate slots with consolidation bonus (second pass)
                     valid_slots_with_scores_pass2 = []
                     
                     for slot in usable_slots:
@@ -792,38 +786,21 @@ class ScheduleOptimizer:
                         if not can_play:
                             continue
                         
-                        # Calculate consolidation bonus
-                        consolidation_bonus_pass2 = 0
-                        consolidation_bonus_pass2 += self._get_consolidation_bonus(team, slot, games)
-                        consolidation_bonus_pass2 += self._get_consolidation_bonus(opponent, slot, games)
+                        slot_score_pass2 = self._calculate_slot_score_for_matchup(team, opponent, slot, games)
                         
-                        valid_slots_with_scores_pass2.append((consolidation_bonus_pass2, slot))
+                        valid_slots_with_scores_pass2.append((slot_score_pass2, slot))
                     
-                    # Pick best slot with consolidation bonus
                     if not valid_slots_with_scores_pass2:
                         continue
                     
                     valid_slots_with_scores_pass2.sort(reverse=True, key=lambda x: x[0])
-                    best_consolidation_pass2, best_slot_pass2 = valid_slots_with_scores_pass2[0]
+                    best_score_pass2, best_slot_pass2 = valid_slots_with_scores_pass2[0]
                     
                     slot = best_slot_pass2
                     slot_key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
                     time_slot_key = (slot.date, slot.start_time)
                     
-                    # Rule 14: Host school is home team
-                    team_is_host = self._facility_belongs_to_school(slot.facility.name, team.school.name)
-                    opponent_is_host = self._facility_belongs_to_school(slot.facility.name, opponent.school.name)
-                    
-                    if team_is_host and not opponent_is_host:
-                        home_team = team
-                        away_team = opponent
-                    elif opponent_is_host and not team_is_host:
-                        home_team = opponent
-                        away_team = team
-                    else:
-                        # Neither or both are hosts - default to team as home
-                        home_team = team
-                        away_team = opponent
+                    home_team, away_team = self._determine_home_away_teams(team, opponent, slot.facility)
                     
                     game = Game(
                         id=f"{division.value}_{len(games)}",
@@ -835,14 +812,10 @@ class ScheduleOptimizer:
                     
                     games.append(game)
                     used_slots.add(slot_key)
-                    global_used_slots.add(slot_key)  # Mark as used globally
+                    global_used_slots.add(slot_key)
                     
                     team_time_slots[team.id].add(time_slot_key)
                     team_time_slots[opponent.id].add(time_slot_key)
-                    
-                    # REMOVED: School time slot tracking to allow multi-court usage
-                    # school_time_slots[team.school.name].add(time_slot_key)
-                    # school_time_slots[opponent.school.name].add(time_slot_key)
                     
                     team_games_count[team.id] += 1
                     team_games_count[opponent.id] += 1
@@ -856,13 +829,15 @@ class ScheduleOptimizer:
                         matchups_used.add(matchup_key)
                         matchup_frequency[matchup_key] += 1
                     
-                    matchups_by_date[slot.date].add(matchup_key)  # Track this matchup on this date
+                    matchups_by_date[slot.date].add(matchup_key)
                     
                     needed -= 1
                     scheduled = True
                     
-                    if best_consolidation_pass2 > 0:
-                        logger.debug(f"  Consolidated (pass2): {team.id} vs {opponent.id} at {slot.facility.name} (bonus: {best_consolidation_pass2})")
+                    if best_score_pass2 > 50000:
+                        logger.debug(f"  Home game (pass2): {home_team.id} vs {away_team.id} at {slot.facility.name} (score: {best_score_pass2})")
+                    elif best_score_pass2 > 1000:
+                        logger.debug(f"  Consolidated (pass2): {team.id} vs {opponent.id} at {slot.facility.name} (score: {best_score_pass2})")
                     
                     if scheduled:
                         progress_made = True
@@ -919,20 +894,8 @@ class ScheduleOptimizer:
                         if matchup_key in matchups_by_date[slot.date]:
                             continue  # Skip - these teams already playing/played today
                         
-                        # Rule 14: Host school is home team
-                        team_is_host = self._facility_belongs_to_school(slot.facility.name, team.school.name)
-                        opponent_is_host = self._facility_belongs_to_school(slot.facility.name, opponent.school.name)
-                        
-                        if team_is_host and not opponent_is_host:
-                            home_team = team
-                            away_team = opponent
-                        elif opponent_is_host and not team_is_host:
-                            home_team = opponent
-                            away_team = team
-                        else:
-                            # Neither or both are hosts - default to team as home
-                            home_team = team
-                            away_team = opponent
+                        # Determine home/away based on facility ownership
+                        home_team, away_team = self._determine_home_away_teams(team, opponent, slot.facility)
                         
                         game = Game(
                             id=f"{division.value}_{len(games)}",
