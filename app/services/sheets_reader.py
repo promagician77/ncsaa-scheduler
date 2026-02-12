@@ -261,11 +261,10 @@ class SheetsReader:
         match = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', team_str)
         if match:
             school_name = match.group(1).strip()
-            school_name = self._normalize_school_name(school_name)
             coach_name = match.group(2).strip()
             return school_name, coach_name
         
-        return self._normalize_school_name(team_str), None
+        return team_str, None
     
     def load_teams(self) -> List[Team]:
         if self._teams_cache:
