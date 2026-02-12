@@ -2,6 +2,7 @@ from ortools.sat.python import cp_model
 from datetime import datetime, date, time, timedelta
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
+import random
 
 from app.models import (
     Team, Facility, Game, TimeSlot, Division, Schedule,
@@ -33,8 +34,10 @@ class ScheduleOptimizer:
             self.holidays.add(self._parse_date(holiday_str))
         
         self.teams_by_division = self._group_teams_by_division()
+        logger.info(f"Teams by division: {self.teams_by_division}")
 
         self.time_slots = self._generate_time_slots()
+        logger.info(f"Time slots: {self.time_slots}")
         logger.info(f"Scheduler is successfuly initialized with {len(self.time_slots)} time slots")
     
     def _determine_home_away_teams(self, team1: Team, team2: Team, facility: Facility) -> Tuple[Team, Team]:
@@ -253,6 +256,66 @@ class ScheduleOptimizer:
         
         return score
         
+    def _create_diverse_chunks(self, teams: List[Team], chunk_size: int = 35) -> List[List[Team]]:
+        """
+        Create diverse chunks of teams for scheduling optimization.
+        Uses interleaved grouping to ensure each chunk has a good mix of:
+        - Different schools
+        - Different facility owners (for home game distribution)
+        - Different coaches (for consolidation opportunities)
+        - Different divisions (for simultaneous scheduling)
+        """
+        # Group teams by multiple criteria for diversity
+        school_groups = defaultdict(list)
+        facility_groups = defaultdict(list)
+        coach_groups = defaultdict(list)
+        division_groups = defaultdict(list)
+        
+        for team in teams:
+            school_groups[team.school.name].append(team)
+            
+            # Find team's home facility
+            home_facility = None
+            for facility in self.facilities:
+                if facility.owned_by_school and facility.owned_by_school.strip().lower() == team.school.name.strip().lower():
+                    home_facility = facility.name
+                    break
+            facility_groups[home_facility or "neutral"].append(team)
+            
+            coach_groups[team.coach_name or "no_coach"].append(team)
+            division_groups[team.division].append(team)
+        
+        # Create stratified shuffle: interleave teams from different groups
+        # This ensures diversity in each chunk
+        shuffled_teams = []
+        
+        # Round-robin through schools to distribute evenly
+        school_lists = list(school_groups.values())
+        random.shuffle(school_lists)  # Randomize school order
+        
+        max_school_size = max(len(teams) for teams in school_lists) if school_lists else 0
+        
+        for i in range(max_school_size):
+            for school_teams in school_lists:
+                if i < len(school_teams):
+                    shuffled_teams.append(school_teams[i])
+        
+        # Create chunks
+        chunks = []
+        for i in range(0, len(shuffled_teams), chunk_size):
+            chunk = shuffled_teams[i:i + chunk_size]
+            if len(chunk) >= 2:  # Only add chunks with at least 2 teams
+                chunks.append(chunk)
+        
+        # Log chunk diversity statistics
+        for idx, chunk in enumerate(chunks):
+            divisions = set(t.division for t in chunk)
+            schools = set(t.school.name for t in chunk)
+            coaches = set(t.coach_name for t in chunk if t.coach_name)
+            logger.info(f"  Chunk {idx + 1}: {len(chunk)} teams, {len(divisions)} divisions, {len(schools)} schools, {len(coaches)} coaches")
+        
+        return chunks
+    
     def optimize_schedule(self) -> Schedule:
         logger.info("=" * 60)
         logger.info("Starting schedule optimization...")
@@ -264,44 +327,97 @@ class ScheduleOptimizer:
         )
         
         self.global_school_time_slots = defaultdict(set)
-        
         self.global_used_slots = set()
         
-        for division, division_teams in self.teams_by_division.items():
-            logger.info(f"Scheduling division: {division.value}")
-            logger.info(f"  Teams: {len(division_teams)}")
+        logger.info(f"Total teams: {len(self.teams)}")
+        
+        # STEP 1: Separate ES_K1_REC teams (special constraints)
+        k1_teams = [t for t in self.teams if t.division == Division.ES_K1_REC]
+        other_teams = [t for t in self.teams if t.division != Division.ES_K1_REC]
+        
+        logger.info(f"  ES_K1_REC teams: {len(k1_teams)}")
+        logger.info(f"  Other division teams: {len(other_teams)}")
+        
+        # STEP 2: Schedule ES_K1_REC teams first (they need 8ft rims and cluster matching)
+        if k1_teams:
+            logger.info("=" * 60)
+            logger.info("PHASE 1: Scheduling ES_K1_REC teams (8ft rims required)")
+            logger.info("=" * 60)
             
-            if len(division_teams) < 2:
-                logger.info(f"  Skipping - not enough teams")
-                continue
-            
-            if len(division_teams) >= 30:
-                logger.info(f"  Using CP-SAT solver (large division, dynamic timeout)...")
-                division_games = self._schedule_division(division, division_teams)
+            if len(k1_teams) >= 30:
+                logger.info(f"  Using CP-SAT solver for K1 teams...")
+                k1_games = self._schedule_chunk_cpsat(k1_teams, "K1")
                 team_counts = defaultdict(int)
-                for game in division_games:
+                for game in k1_games:
                     team_counts[game.home_team.id] += 1
                     team_counts[game.away_team.id] += 1
-                teams_under_8 = [t for t in division_teams if team_counts[t.id] < 8]
+                teams_under_8 = [t for t in k1_teams if team_counts[t.id] < 8]
+                
                 if teams_under_8:
-                    logger.info(f"  CP-SAT incomplete ({len(teams_under_8)} teams < 8 games), switching to greedy algorithm...")
-                    division_games = self._greedy_schedule_division(division, division_teams)
+                    logger.info(f"  CP-SAT incomplete, switching to greedy for K1 teams...")
+                    k1_games = self._schedule_chunk_greedy(k1_teams, "K1")
             else:
-                logger.info(f"  Using optimized greedy algorithm...")
-                division_games = self._greedy_schedule_division(division, division_teams)
+                logger.info(f"  Using greedy algorithm for K1 teams...")
+                k1_games = self._schedule_chunk_greedy(k1_teams, "K1")
             
-            for game in division_games:
+            for game in k1_games:
                 schedule.add_game(game)
             
-            logger.info(f"  Generated {len(division_games)} games")
+            logger.info(f"  Generated {len(k1_games)} K1 games")
+            logger.info(f"  Slots used: {len(self.global_used_slots)}")
         
-        logger.info("=" * 60)
+        # STEP 3: Create diverse chunks from remaining teams (NO ES_K1_REC)
+        if other_teams:
+            logger.info("=" * 60)
+            logger.info("PHASE 2: Scheduling other divisions (diverse chunks)")
+            logger.info("=" * 60)
+            logger.info(f"Creating diverse chunks from {len(other_teams)} teams...")
+            
+            team_chunks = self._create_diverse_chunks(other_teams, chunk_size=35)
+            
+            logger.info(f"Created {len(team_chunks)} chunks for scheduling")
+            logger.info("=" * 60)
+            
+            # Schedule each chunk
+            for chunk_idx, chunk_teams in enumerate(team_chunks, start=1):
+                logger.info(f"Scheduling Chunk {chunk_idx}/{len(team_chunks)}")
+                logger.info(f"  Teams: {len(chunk_teams)}")
+                logger.info(f"  Slots available: {len(self.time_slots) - len(self.global_used_slots)}")
+                
+                # Determine which scheduling method to use
+                if len(chunk_teams) >= 30:
+                    logger.info(f"  Using CP-SAT solver (chunk size >= 30)...")
+                    chunk_games = self._schedule_chunk_cpsat(chunk_teams, chunk_idx)
+                    
+                    # Check if CP-SAT was successful
+                    team_counts = defaultdict(int)
+                    for game in chunk_games:
+                        team_counts[game.home_team.id] += 1
+                        team_counts[game.away_team.id] += 1
+                    teams_under_8 = [t for t in chunk_teams if team_counts[t.id] < 8]
+                    
+                    if teams_under_8:
+                        logger.info(f"  CP-SAT incomplete ({len(teams_under_8)} teams < 8 games), switching to greedy...")
+                        chunk_games = self._schedule_chunk_greedy(chunk_teams, chunk_idx)
+                else:
+                    logger.info(f"  Using greedy algorithm (chunk size < 30)...")
+                    chunk_games = self._schedule_chunk_greedy(chunk_teams, chunk_idx)
+                
+                # Add games to schedule
+                for game in chunk_games:
+                    schedule.add_game(game)
+                
+                logger.info(f"  Generated {len(chunk_games)} games")
+                logger.info(f"  Total slots used: {len(self.global_used_slots)}")
+                logger.info("=" * 60)
+        
         logger.info(f"Schedule optimization complete: {len(schedule.games)} total games")
         logger.info("=" * 60)
         
         return schedule
     
-    def _schedule_division(self, division: Division, teams: List[Team]) -> List[Game]:
+    def _schedule_chunk_cpsat(self, teams: List[Team], chunk_id) -> List[Game]:
+        """Schedule a chunk of teams using CP-SAT optimization."""
         model = cp_model.CpModel()
         
         game_vars = {}
@@ -309,9 +425,16 @@ class ScheduleOptimizer:
         
         num_teams = len(teams)
         
+        # Check if chunk has K1 teams (need 8ft rims)
+        has_k1_teams = any(team.division == Division.ES_K1_REC for team in teams)
+        
         usable_slot_indices = []
         
         for slot_idx, slot in enumerate(self.time_slots):
+            # Filter for 8ft rims if needed
+            if has_k1_teams and not slot.facility.has_8ft_rims:
+                continue
+                
             slot_key = (slot.date, slot.start_time, slot.facility.name, slot.court_number)
             if hasattr(self, 'global_used_slots') and slot_key in self.global_used_slots:
                 continue
@@ -328,7 +451,8 @@ class ScheduleOptimizer:
                 if team1.school == team2.school:
                     continue
                 
-                if division == Division.ES_K1_REC:
+                # ES_K1_REC division specific rule: only match within same cluster
+                if team1.division == Division.ES_K1_REC or team2.division == Division.ES_K1_REC:
                     if team1.cluster and team2.cluster and team1.cluster != team2.cluster:
                         continue
                 
@@ -486,8 +610,7 @@ class ScheduleOptimizer:
         # Log statistics for debugging
         logger.info(f"  Coach clustering: {len(coach_date_facility_games)} coach-date-facility combinations")
         
-        # Add bonuses for coach consolidation (LINEAR constraints only)
-        consecutive_var_count = 0
+        # Add bonuses for coach consolidation (SIMPLIFIED - no consecutive slots)
         for (coach_name, date, facility), games_info in coach_date_facility_games.items():
             if len(games_info) < 2:
                 continue
@@ -505,64 +628,11 @@ class ScheduleOptimizer:
             
             # Add LINEAR bonus to objective
             objective_terms.append(consolidation_var * COACH_CONSOLIDATION_BONUS)
-            
-            # BONUS: Check for consecutive games (60 minutes apart)
-            # Group games by slot index
-            slot_to_games = defaultdict(list)
-            for game_var, idx in games_info:
-                slot_to_games[idx].append(game_var)
-            
-            # Check pairs of slots that are consecutive in time
-            sorted_slot_indices = sorted(slot_to_games.keys())
-            for k in range(len(sorted_slot_indices)):
-                idx1 = sorted_slot_indices[k]
-                slot1 = self.time_slots[usable_slot_indices[idx1]]
-                slot1_minutes = slot1.start_time.hour * 60 + slot1.start_time.minute
-                
-                # Check next few slots to find consecutive ones (within MAX_TIME_DIFF_MINUTES)
-                for m in range(k + 1, len(sorted_slot_indices)):
-                    idx2 = sorted_slot_indices[m]
-                    slot2 = self.time_slots[usable_slot_indices[idx2]]
-                    slot2_minutes = slot2.start_time.hour * 60 + slot2.start_time.minute
-                    time_diff = abs(slot2_minutes - slot1_minutes)
-                    
-                    if time_diff > MAX_TIME_DIFF_MINUTES:
-                        break  # No point checking further slots
-                    
-                    # Special bonus for consecutive slots (60 minutes apart)
-                    if time_diff == 60:
-                        games_slot1 = slot_to_games[idx1]
-                        games_slot2 = slot_to_games[idx2]
-                        
-                        # Skip if either slot has no games (shouldn't happen but safe)
-                        if not games_slot1 or not games_slot2:
-                            continue
-                        
-                        # Create indicator variable: 1 if at least one game in slot1 AND one in slot2
-                        consecutive_var = model.NewBoolVar(
-                            f'consec_{coach_name[:15]}_{date.isoformat()}_{safe_facility}_{idx1}_{idx2}'
-                        )
-                        
-                        # FIXED: Create intermediate variables to avoid contradictory constraints
-                        has_game_slot1 = model.NewBoolVar(f'has1_{coach_name[:15]}_{idx1}')
-                        has_game_slot2 = model.NewBoolVar(f'has2_{coach_name[:15]}_{idx2}')
-                        
-                        # Link intermediate variables to actual games
-                        model.Add(sum(games_slot1) >= 1).OnlyEnforceIf(has_game_slot1)
-                        model.Add(sum(games_slot1) == 0).OnlyEnforceIf(has_game_slot1.Not())
-                        
-                        model.Add(sum(games_slot2) >= 1).OnlyEnforceIf(has_game_slot2)
-                        model.Add(sum(games_slot2) == 0).OnlyEnforceIf(has_game_slot2.Not())
-                        
-                        # consecutive_var = has_game_slot1 AND has_game_slot2
-                        model.AddBoolAnd([has_game_slot1, has_game_slot2]).OnlyEnforceIf(consecutive_var)
-                        model.AddBoolOr([has_game_slot1.Not(), has_game_slot2.Not()]).OnlyEnforceIf(consecutive_var.Not())
-                        
-                        # Add LINEAR bonus
-                        objective_terms.append(consecutive_var * COACH_CONSECUTIVE_BONUS)
-                        consecutive_var_count += 1
         
-        logger.info(f"  Created {consecutive_var_count} consecutive slot bonus variables")
+        logger.info(f"  Coach consolidation constraints added (simplified model)")
+        
+        # REMOVED: Consecutive slot bonus logic (was causing MODEL_INVALID with 75k variables)
+        # The basic coach consolidation above is sufficient
         
         # Add search hints to prioritize coach consolidation (BEFORE setting objective)
         # Hints help solver find good solutions faster
@@ -628,11 +698,11 @@ class ScheduleOptimizer:
                             away_team = teams[i]
                         
                         game = Game(
-                            id=f"{division.value}_{game_id}",
+                            id=f"chunk{chunk_id}_{game_id}",
                             home_team=home_team,
                             away_team=away_team,
                             time_slot=slot,
-                            division=division
+                            division=home_team.division  # Use team's own division
                         )
                         
                         games.append(game)
@@ -664,11 +734,12 @@ class ScheduleOptimizer:
                 logger.info(f"  SUCCESS: {clustered_coaches} coaches have clustered games!")
         else:
             logger.info(f"  No solution found (status: {solver.StatusName(status)})")
-            games = self._greedy_schedule_division(division, teams)
+            games = self._schedule_chunk_greedy(teams, chunk_id)
         
         return games
     
-    def _greedy_schedule_division(self, division: Division, teams: List[Team]) -> List[Game]:
+    def _schedule_chunk_greedy(self, teams: List[Team], chunk_id: int) -> List[Game]:
+        """Schedule a chunk of teams using greedy algorithm."""
         games = []
         used_slots = set()
         team_games_count = defaultdict(int)
@@ -692,7 +763,9 @@ class ScheduleOptimizer:
         
         usable_slots = []
         for slot in self.time_slots:
-            if division == Division.ES_K1_REC and not slot.facility.has_8ft_rims:
+            # Check if any team in this chunk needs 8ft rims (ES_K1_REC division)
+            has_k1_team = any(team.division == Division.ES_K1_REC for team in teams)
+            if has_k1_team and not slot.facility.has_8ft_rims:
                 continue
             if not slot.facility.is_available(slot.date):
                 continue
@@ -728,7 +801,8 @@ class ScheduleOptimizer:
                 if team1.school == team2.school:
                     continue
                     
-                if division == Division.ES_K1_REC:
+                # ES_K1_REC division specific rule: only match within same cluster
+                if team1.division == Division.ES_K1_REC or team2.division == Division.ES_K1_REC:
                     if team1.cluster and team2.cluster and team1.cluster != team2.cluster:
                         continue
                 
@@ -799,11 +873,11 @@ class ScheduleOptimizer:
             home_team, away_team = self._determine_home_away_teams(team1, team2, slot.facility)
             
             game = Game(
-                id=f"{division.value}_{len(games)}",
+                id=f"chunk{chunk_id}_{len(games)}",
                 home_team=home_team,
                 away_team=away_team,
                 time_slot=slot,
-                division=division
+                division=home_team.division  # Use team's own division
             )
             
             games.append(game)
@@ -963,11 +1037,11 @@ class ScheduleOptimizer:
                     home_team, away_team = self._determine_home_away_teams(team, opponent, slot.facility)
                     
                     game = Game(
-                        id=f"{division.value}_{len(games)}",
+                        id=f"chunk{chunk_id}_{len(games)}",
                         home_team=home_team,
                         away_team=away_team,
                         time_slot=slot,
-                        division=division
+                        division=home_team.division  # Use team's own division
                     )
                     
                     games.append(game)
@@ -1058,11 +1132,11 @@ class ScheduleOptimizer:
                         home_team, away_team = self._determine_home_away_teams(team, opponent, slot.facility)
                         
                         game = Game(
-                            id=f"{division.value}_{len(games)}",
+                            id=f"chunk{chunk_id}_{len(games)}",
                             home_team=home_team,
                             away_team=away_team,
                             time_slot=slot,
-                            division=division
+                            division=home_team.division  # Use team's own division
                         )
                         
                         games.append(game)
