@@ -289,6 +289,8 @@ class SheetsReader:
                 "ES GIRL'S COMP": Division.ES_GIRLS_COMP,
                 " BOY'S JV": Division.BOYS_JV,
                 " GIRL'S JV": Division.GIRLS_JV,
+                "BOY'S VARSITY": Division.BOYS_VARSITY,
+                "GIRL'S VARSITY": Division.GIRLS_VARSITY,
             }
             
             for col_idx, header in enumerate(headers):

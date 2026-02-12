@@ -10,17 +10,16 @@ from enum import Enum
 
 
 class Division(Enum):
-    """Basketball divisions in the league."""
     ES_K1_REC = "ES K-1 REC"
     ES_23_REC = "ES 2-3 REC"
     ES_BOYS_COMP = "ES BOY'S COMP"
     ES_GIRLS_COMP = "ES GIRL'S COMP"
     BOYS_JV = "BOY'S JV"
     GIRLS_JV = "GIRL'S JV"
-
+    BOYS_VARSITY = "BOY'S VARSITY"
+    GIRLS_VARSITY = "GIRL'S VARSITY"
 
 class Tier(Enum):
-    """Competitive tier classifications."""
     TIER_1 = "Tier 1"
     TIER_2 = "Tier 2"
     TIER_3 = "Tier 3"
