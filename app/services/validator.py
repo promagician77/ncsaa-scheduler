@@ -343,26 +343,28 @@ class ScheduleValidator:
             teams.add(game.away_team)
         
         for team in teams:
-            if not team.rivals:
+            # Check if this team's school has rivals
+            if not team.school.rival_schools:
                 continue
             
             team_games = schedule.get_team_games(team)
-            opponents = set()
+            opponent_schools = set()
             
             for game in team_games:
                 opponent = game.get_opponent(team)
                 if opponent:
-                    opponents.add(opponent.id)
+                    opponent_schools.add(opponent.school.name)
             
-            missing_rivals = team.rivals - opponents
+            # Find which rival schools this team hasn't played
+            missing_rival_schools = team.school.rival_schools - opponent_schools
             
-            if missing_rivals:
+            if missing_rival_schools:
                 constraint = SchedulingConstraint(
                     constraint_type="missing_rival_matchup",
                     severity="soft",
-                    description=f"{team.id} is missing games against rivals: {', '.join(missing_rivals)}",
+                    description=f"{team.id} is missing games against rival schools: {', '.join(missing_rival_schools)}",
                     affected_teams=[team],
-                    penalty_score=len(missing_rivals) * PRIORITY_WEIGHTS['respect_rivals']
+                    penalty_score=len(missing_rival_schools) * PRIORITY_WEIGHTS['respect_rivals']
                 )
                 result.add_violation(constraint)
     

@@ -29,7 +29,7 @@ class SheetsReader:
     def _get_credentials(self) -> Credentials:
         return get_google_credentials()
     
-    def _parse_date(self, date_str: str) -> Optional[date]:
+    def _parse_date(self, date_str: str) -> Optional[date]: 
         if not date_str or date_str.strip() == '':
             return None
         
@@ -156,17 +156,23 @@ class SheetsReader:
             data = sheet.get_all_values()
             
             header_row = 0
-            for i, row in enumerate(data):
-                if any('school' in str(cell).lower() for cell in row):
-                    header_row = i
-                    break
             
             headers = [str(h).strip().lower() for h in data[header_row]]
             
-            school_col = next((i for i, h in enumerate(headers) if 'school' in h), 0)
-            cluster_col = next((i for i, h in enumerate(headers) if 'cluster' in h), -1)
-            tier_col = next((i for i, h in enumerate(headers) if 'tier' in h), -1)
+            # Debug: print all headers
+            print(f"DEBUG: Header row index: {header_row}")
+            print(f"DEBUG: Headers found: {headers[:10]}")  # Show first 10 columns
             
+            school_col = 0
+            tier_col = next((i for i, h in enumerate(headers) if 'tier' in h), -1)
+            cluster_col = next((i for i, h in enumerate(headers) if 'cluster' in h), -1)
+            rivals_col = next((i for i, h in enumerate(headers) if 'rival' in h), -1)
+            dnp_col = next((i for i, h in enumerate(headers) if 'do not play' in h or 'do not' in h), -1)
+            blackout_col = next((i for i, h in enumerate(headers) if 'blackouts' in h), -1)
+            
+            print(f"Found columns: school={school_col}, tier={tier_col}, cluster={cluster_col}, rivals={rivals_col}, dnp={dnp_col}, blackout={blackout_col}")
+            
+            # Parse each school row
             for row in data[header_row + 1:]:
                 if not row or len(row) <= school_col:
                     continue
@@ -175,71 +181,80 @@ class SheetsReader:
                 if not school_name or school_name == '':
                     continue
                 
-                cluster = None
-                if cluster_col >= 0 and len(row) > cluster_col:
-                    cluster = self._parse_enum(row[cluster_col], Cluster)
-                
+                # Parse tier
                 tier = None
                 if tier_col >= 0 and len(row) > tier_col:
                     tier = self._parse_enum(row[tier_col], Tier)
                 
+                # Parse cluster
+                cluster = None
+                if cluster_col >= 0 and len(row) > cluster_col:
+                    cluster = self._parse_enum(row[cluster_col], Cluster)
+                
+                # Parse rival schools
+                rival_schools = set()
+                if rivals_col >= 0 and len(row) > rivals_col:
+                    rivals_str = str(row[rivals_col]).strip()
+                    if rivals_str and rivals_str not in ['—', '--', '']:
+                        # Split by semicolon
+                        for rival in rivals_str.split(';'):
+                            rival = rival.strip()
+                            if rival:
+                                rival_schools.add(rival)
+                
+                # Parse do-not-play schools
+                do_not_play_schools = set()
+                if dnp_col >= 0 and len(row) > dnp_col:
+                    dnp_str = str(row[dnp_col]).strip()
+                    if dnp_str and dnp_str not in ['—', '--', '']:
+                        # Split by semicolon
+                        for dnp in dnp_str.split(';'):
+                            dnp = dnp.strip()
+                            if dnp:
+                                do_not_play_schools.add(dnp)
+                
+                # Parse blackout dates
+                blackout_dates = []
+                if blackout_col >= 0 and len(row) > blackout_col:
+                    blackout_str = str(row[blackout_col]).strip()
+                    if blackout_str and blackout_str not in ['—', '--', '']:
+                        # Parse date range (e.g., "Jan 10-15")
+                        blackout_dates = self._parse_date_range(blackout_str)
+                
+                # Create school object
                 schools[school_name] = School(
                     name=school_name,
                     cluster=cluster,
-                    tier=tier
+                    tier=tier,
+                    blackout_dates=blackout_dates,
+                    rival_schools=rival_schools,
+                    do_not_play_schools=do_not_play_schools
                 )
             
-            try:
-                tier_sheet = self.spreadsheet.worksheet(SHEET_COMPETITIVE_TIERS)
-                tier_data = tier_sheet.get_all_values()
-
-                if len(tier_data) > 1:
-                    tier_map = {
-                        1: Tier.TIER_1,  # Column B
-                        2: Tier.TIER_2,  # Column C
-                        3: Tier.TIER_3,  # Column D
-                        4: Tier.TIER_4   # Column E
-                    }
-                    
-                    for row in tier_data[2:]:
-                        if not row or len(row) < 2:
-                            continue
-                        
-                        for col_idx, tier in tier_map.items():
-                            if len(row) > col_idx:
-                                school_name = str(row[col_idx]).strip()
-                                if school_name and school_name != '':
-                                    school_name = self._normalize_school_name(school_name)
-                                    
-                                    if school_name in schools:
-                                        schools[school_name].tier = tier
-                                    else:
-                                        schools[school_name] = School(
-                                            name=school_name,
-                                            cluster=None,
-                                            tier=tier
-                                        )
-                
-                print(f"Loaded tier classifications from COMPETITIVE TIERS sheet")
-            except Exception as e:
-                print(f"Warning: Could not load COMPETITIVE TIERS sheet: {e}")
-            
-            print(f"Loaded {len(schools)} schools")
+            print(f"Loaded {len(schools)} schools from TIERS_CLUSTERS sheet")
+            print(f"  - {len([s for s in schools.values() if s.rival_schools])} schools with rivals")
+            print(f"  - {len([s for s in schools.values() if s.do_not_play_schools])} schools with do-not-play restrictions")
+            print(f"  - {len([s for s in schools.values() if s.blackout_dates])} schools with blackout dates")
             
         except Exception as e:
             print(f"Error loading schools: {e}")
+            import traceback
+            traceback.print_exc()
         
         self._schools_cache = schools
         return schools
     
     def _normalize_school_name(self, school_name: str) -> str:
+        """Normalize school names by removing team identifiers and color suffixes."""
         if not school_name:
             return school_name
         
         import re
         
+        # Remove trailing team identifiers like "1A", "2B", "3C"
         normalized = re.sub(r'\s+\d+[A-Z]\s*$', '', school_name).strip()
         
+        # Remove color suffixes
         color_suffixes = [
             'Blue', 'Silver', 'White', 'Black', 'Gold', 'Navy', 
             'Red', 'Green', 'Purple', 'Orange', 'Yellow'
@@ -262,9 +277,11 @@ class SheetsReader:
         if match:
             school_name = match.group(1).strip()
             coach_name = match.group(2).strip()
+            # Normalize the school name to remove color suffixes and team numbers
+            school_name = self._normalize_school_name(school_name)
             return school_name, coach_name
         
-        return team_str, None
+        return self._normalize_school_name(team_str), None
     
     def load_teams(self) -> List[Team]:
         if self._teams_cache:
@@ -502,93 +519,6 @@ class SheetsReader:
         self._facilities_cache = facilities
         return facilities
     
-    def load_rivals_and_restrictions(self, teams: List[Team]) -> None:
-        try:
-            sheet = self.spreadsheet.worksheet(SHEET_TIERS_CLUSTERS)
-            data = sheet.get_all_values()
-            
-            team_lookup = {}
-            for team in teams:
-                key = f"{team.school.name}_{team.division.value}"
-                team_lookup[key] = team
-            
-            header_row = 0
-            for i, row in enumerate(data):
-                if any('rival' in str(cell).lower() or 'do not play' in str(cell).lower() for cell in row):
-                    header_row = i
-                    break
-            
-            headers = [str(h).strip().lower() for h in data[header_row]]
-            
-            school_col = next((i for i, h in enumerate(headers) if 'school' in h), 0)
-            rivals_col = next((i for i, h in enumerate(headers) if 'rival' in h), -1)
-            dnp_col = next((i for i, h in enumerate(headers) if 'do not play' in h), -1)
-            
-            for row in data[header_row + 1:]:
-                if not row or len(row) <= school_col:
-                    continue
-                
-                school_name = str(row[school_col]).strip()
-                if not school_name:
-                    continue
-                
-                if rivals_col >= 0 and len(row) > rivals_col and row[rivals_col]:
-                    rival_schools = [s.strip() for s in str(row[rivals_col]).split(',')]
-                    for team in teams:
-                        if team.school.name == school_name:
-                            for rival_school in rival_schools:
-                                for rival_team in teams:
-                                    if rival_team.school.name == rival_school and rival_team.division == team.division:
-                                        team.rivals.add(rival_team.id)
-                
-                if dnp_col >= 0 and len(row) > dnp_col and row[dnp_col]:
-                    dnp_schools = [s.strip() for s in str(row[dnp_col]).split(',')]
-                    for team in teams:
-                        if team.school.name == school_name:
-                            for dnp_school in dnp_schools:
-                                for dnp_team in teams:
-                                    if dnp_team.school.name == dnp_school and dnp_team.division == team.division:
-                                        team.do_not_play.add(dnp_team.id)
-            
-            print(f"Loaded rival and restriction relationships")
-            
-        except Exception as e:
-            print(f"Error loading rivals/restrictions: {e}")
-    
-    def load_blackouts(self) -> Dict[str, List[date]]:
-        try:
-            from app.core.config import SHEET_BLACKOUTS
-            blackouts_sheet = self.spreadsheet.worksheet(SHEET_BLACKOUTS)
-            data = blackouts_sheet.get_all_values()
-            
-            blackouts = {}
-            
-            for row in data[1:]:
-                if len(row) < 2:
-                    continue
-                
-                school_name = str(row[0]).strip()
-                blackout_str = str(row[1]).strip()
-                
-                if not school_name or not blackout_str:
-                    continue
-                
-                normalized_name = self._normalize_school_name(school_name)
-                
-                dates = self._parse_date_range(blackout_str)
-                
-                if dates:
-                    if normalized_name in blackouts:
-                        blackouts[normalized_name].extend(dates)
-                    else:
-                        blackouts[normalized_name] = dates
-            
-            print(f"Loaded blackout dates for {len(blackouts)} schools")
-            return blackouts
-            
-        except Exception as e:
-            print(f"Warning: Could not load blackouts: {e}")
-            return {}
     
     def load_all_data(self) -> Tuple[List[Team], List[Facility], Dict]:
         print("=" * 60)
@@ -596,19 +526,22 @@ class SheetsReader:
         print("=" * 60)
         
         rules = self.load_rules()
+        
+        # Load schools (includes tier, cluster, rivals, do-not-play, blackouts from TIERS_CLUSTERS sheet)
         schools = self.load_schools()
+        
+        # Load teams and facilities
         teams = self.load_teams()
         facilities = self.load_facilities()
-        blackouts = self.load_blackouts()
-        self.load_rivals_and_restrictions(teams)
             
-        rules['blackouts'] = blackouts
-        
         print("=" * 60)
         print(f"Data loading complete:")
         print(f"  - {len(schools)} schools")
         print(f"  - {len(teams)} teams")
         print(f"  - {len(facilities)} facilities")
+        print(f"  - {len([s for s in schools.values() if s.blackout_dates])} schools with blackout dates")
+        print(f"  - {len([s for s in schools.values() if s.rival_schools])} schools with rivals")
+        print(f"  - {len([s for s in schools.values() if s.do_not_play_schools])} schools with do-not-play restrictions")
         print("=" * 60)
         
         return teams, facilities, rules

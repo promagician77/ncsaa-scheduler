@@ -25,6 +25,8 @@ class ScheduleOptimizer:
         self.facilities = facilities
         self.rules = rules
 
+        logger.info(f"Teams: {self.teams}")
+
         self.season_start = self._parse_date(rules.get('season_start', SEASON_START_DATE))
         self.season_end = self._parse_date(rules.get('season_end', SEASON_END_DATE))
         
@@ -34,10 +36,8 @@ class ScheduleOptimizer:
             self.holidays.add(self._parse_date(holiday_str))
         
         self.teams_by_division = self._group_teams_by_division()
-        logger.info(f"Teams by division: {self.teams_by_division}")
 
         self.time_slots = self._generate_time_slots()
-        logger.info(f"Time slots: {self.time_slots}")
         logger.info(f"Scheduler is successfuly initialized with {len(self.time_slots)} time slots")
     
     def _determine_home_away_teams(self, team1: Team, team2: Team, facility: Facility) -> Tuple[Team, Team]:
