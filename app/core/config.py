@@ -2,49 +2,12 @@ from datetime import time
 import os
 import json
 from dotenv import load_dotenv
-from google.oauth2.service_account import Credentials
 
 load_dotenv()
 
-SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "1vLzG_4nlYIlmm6iaVEJLt277PLlhvaWXbeR8Rj1xLTI")
-
-CREDENTIALS_FILE = os.getenv(
-    "GOOGLE_SHEETS_CREDENTIALS_FILE",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "credentials", "ncsaa-484512-3f8c48632375.json")
-)
-CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON")
-
-
-def get_google_credentials() -> Credentials:
-    scopes = [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-    ]
-    
-    if CREDENTIALS_JSON:
-        try:
-            creds_dict = json.loads(CREDENTIALS_JSON)
-            return Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        except (json.JSONDecodeError, ValueError) as e:
-            raise ValueError(f"Invalid JSON in GOOGLE_SHEETS_CREDENTIALS_JSON: {e}")
-    
-    if CREDENTIALS_FILE and os.path.exists(CREDENTIALS_FILE):
-        return Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-    
-    raise ValueError(
-        "Google Sheets credentials not found. Please set either:\n"
-        "  - GOOGLE_SHEETS_CREDENTIALS_JSON (recommended): JSON string in environment variable\n"
-        "  - GOOGLE_SHEETS_CREDENTIALS_FILE: Path to credentials JSON file\n"
-        "  - Or place credentials file at default location"
-    )
-
-SHEET_DATES_NOTES = "DATES & NOTES"
-SHEET_TIERS_CLUSTERS = "TIERS, CLUSTERS, RIVALS, DO NOT PLAY"
-SHEET_TEAM_LIST = "WINTER BASKETBALL TEAM LIST"
-SHEET_FACILITIES = "FACILITIES"
-SHEET_COMPETITIVE_TIERS = "COMPETITIVE TIERS"
-SHEET_BLACKOUTS = "WINTER BASKETBALL BLACKOUTS"
-SHEET_WEEK_PREFIX = "26 WINTER WEEK"  # Prefix for weekly schedule sheets
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qosxpkqedkszdodluusy.supabase.co")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFvc3hwa3FlZGtzemRvZGx1dXN5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5MzczNjcsImV4cCI6MjA4NjUxMzM2N30.fg6eNAjjI-HpblmIhjYDjUtqmHlpqcKZ2fzQvXFs-iM")
 
 SEASON_START_DATE = "2026-01-05"
 SEASON_END_DATE = "2026-02-28"

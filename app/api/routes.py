@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from celery.result import AsyncResult
 
-from app.services.sheets_reader import SheetsReader
+from app.services.supabase_reader import SupabaseReader
 from app.services.scheduler import ScheduleOptimizer
 from app.services.validator import ScheduleValidator
 from app.core.config import (
@@ -123,7 +123,7 @@ async def get_schedule_status(task_id: str):
 @router.get("/data")
 async def get_scheduling_data():
     try:
-        reader = SheetsReader()
+        reader = SupabaseReader()
         teams, facilities, rules = reader.load_all_data()
         
         schools_dict = {}

@@ -1,13 +1,13 @@
 """
-Services for scheduling, validation, and Google Sheets integration.
+Services for scheduling, validation, and Supabase integration.
 """
 
 from .scheduler import ScheduleOptimizer
 from .validator import ScheduleValidator
-from .sheets_reader import SheetsReader
+from .supabase_reader import SupabaseReader
 
 __all__ = [
     "ScheduleOptimizer",
     "ScheduleValidator",
-    "SheetsReader"
+    "SupabaseReader"
 ]

@@ -55,10 +55,12 @@ class Team:
     school: School
     division: Division
     coach_name: str
-    coach_email: str
+    coach_email: str = ""
     home_facility: Optional[str] = None
     tier: Optional[Tier] = None
     cluster: Optional[Cluster] = None
+    rivals: Set[str] = field(default_factory=set)  # Set of rival team IDs
+    do_not_play: Set[str] = field(default_factory=set)  # Set of do-not-play team IDs
     
     def __hash__(self):
         return hash(self.id)

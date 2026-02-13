@@ -6,7 +6,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.sheets_reader import SheetsReader
+from app.services.supabase_reader import SupabaseReader
 from datetime import date
 
 def main():
@@ -14,7 +14,7 @@ def main():
     print("FACILITY AVAILABILITY DIAGNOSTIC")
     print("=" * 80)
     
-    reader = SheetsReader()
+    reader = SupabaseReader()
     teams, facilities, rules = reader.load_all_data()
     
     # Check first week (Jan 5-11, 2026)

@@ -3,7 +3,7 @@ Celery tasks for schedule generation.
 """
 
 from app.core.celery_app import celery_app
-from app.services.sheets_reader import SheetsReader
+from app.services.supabase_reader import SupabaseReader
 from app.services.scheduler import ScheduleOptimizer
 from app.services.validator import ScheduleValidator
 from app.core.logging_config import get_logger
@@ -25,17 +25,17 @@ def generate_schedule_task(self):
         # Update task state to PROGRESS
         self.update_state(
             state="PROGRESS",
-            meta={"status": "Loading data from Google Sheets..."}
+            meta={"status": "Loading data from Supabase..."}
         )
         
         start_time = datetime.now()
         
-        # Load data from Google Sheets
-        reader = SheetsReader()
+        # Load data from Supabase
+        reader = SupabaseReader()
         teams, facilities, rules = reader.load_all_data()
 
-        logger.info(f"Loaded {len(teams)} teams from Google Sheets")
-        logger.info(f"Loaded {len(facilities)} facilities from Google Sheets")
+        logger.info(f"Loaded {len(teams)} teams from Supabase")
+        logger.info(f"Loaded {len(facilities)} facilities from Supabase")
         logger.info(f"Rules: {rules}")
         
         # Update progress

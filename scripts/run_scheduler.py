@@ -5,7 +5,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.sheets_reader import SheetsReader
+from app.services.supabase_reader import SupabaseReader
 from app.services.scheduler import ScheduleOptimizer
 from app.services.validator import ScheduleValidator
 
@@ -28,15 +28,15 @@ def main():
     args = parser.parse_args()
     
     try:
-        reader = SheetsReader()
+        reader = SupabaseReader()
         teams, facilities, rules = reader.load_all_data()
         
         if not teams:
-            print("ERROR: No teams loaded. Please check the Google Sheet.")
+            print("ERROR: No teams loaded. Please check the Supabase database.")
             return 1
         
         if not facilities:
-            print("ERROR: No facilities loaded. Please check the Google Sheet.")
+            print("ERROR: No facilities loaded. Please check the Supabase database.")
             return 1
         
         optimizer = ScheduleOptimizer(teams, facilities, rules)
